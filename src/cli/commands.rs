@@ -32,6 +32,8 @@ pub async fn open(url: &str) -> Result<()> {
 }
 
 pub fn setup(browser: &str, extension_id: Option<&str>, manifest_path: Option<&Path>) -> Result<()> {
+    validate_setup_args(browser, extension_id)?;
+
     #[cfg(target_os = "windows")]
     let use_registry = manifest_path.is_none();
     let manifest_path = match manifest_path {
@@ -52,10 +54,6 @@ pub fn setup(browser: &str, extension_id: Option<&str>, manifest_path: Option<&P
     }
 
     println!("Wrote native host manifest: {}", manifest_path.display());
-    if extension_id.is_none() {
-        eprintln!("warning: no extension id provided; replace the placeholder before loading the extension");
-    }
-
     Ok(())
 }
 
@@ -375,6 +373,14 @@ fn build_native_host_manifest(
     }
 }
 
+fn validate_setup_args(browser: &str, extension_id: Option<&str>) -> Result<()> {
+    if browser == "chrome" && extension_id.is_none() {
+        bail!("chrome setup requires --extension-id");
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -391,5 +397,11 @@ mod tests {
         let value =
             build_native_host_manifest("firefox", Path::new("/tmp/browser-cli"), Some("ext@example"));
         assert_eq!(value["allowed_extensions"][0], "ext@example");
+    }
+
+    #[test]
+    fn chrome_setup_requires_extension_id() {
+        let err = validate_setup_args("chrome", None).unwrap_err();
+        assert_eq!(err.to_string(), "chrome setup requires --extension-id");
     }
 }
