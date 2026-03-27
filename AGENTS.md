@@ -435,7 +435,7 @@ Relay 和 CLI 无需修改。扩展差异：
   <button id="e2">Get Started</button>
   <input id="e3" type="text" placeholder="Search..."/>
   <checkbox id="e4" checked/>
-  <list id="b1" truncated="true" shown="20" total_items="42" current="1" total="3">
+  <list id="b1" truncated="true" shown="18" total_items="42" current="1" total="3">
     <item>Item one</item>
     <item>Item two</item>
   </list>
@@ -452,7 +452,7 @@ Relay 和 CLI 无需修改。扩展差异：
 
 - 交互元素：`e1`, `e2`, ... — 每次 `get_page` 从 e1 重新编号
 - 文本节点（超过 200 字符时截断）：`t1`, `t2`, ... — 同样每次重新编号
-- 长列表/表格块（超过单块上限时分页）：`b1`, `b2`, ... — 每次 `get_page` 从 b1 重新编号，用 `block` 命令继续读取
+- 长列表/表格块（超过单块渲染行预算时分页）：`b1`, `b2`, ... — 每次 `get_page` 从 b1 重新编号，用 `block` 命令继续读取
 - 未截断的短文本不分配 id
 
 ### 分页策略
@@ -471,7 +471,8 @@ Relay 和 CLI 无需修改。扩展差异：
 ### 块级分页
 
 - 长文本超过 200 字符时会在页面中显示为 `[...,truncated]`，并分配 `tN`
-- 长 `list` / `table` 超过单块上限时，会先输出首个块分页并分配 `bN`
+- 长 `list` / `table` 超过单块渲染行预算时，会先输出首个块分页并分配 `bN`
+- 表格中如果某个 `row` 只有一个 `cell`，且整行足够短，会压缩成单行 XML；太长时再展开为多行
 - 后续分页通过 `browser-cli block <session-id> <block-id> --source-page <page-num> -p <block-page-num>` 读取
 
 ### 复杂 DOM 处理

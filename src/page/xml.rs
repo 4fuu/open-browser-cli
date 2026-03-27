@@ -1,5 +1,7 @@
 use super::structure::{BlockData, Element, PageData};
 
+const MAX_INLINE_XML_LINE_LEN: usize = 100;
+
 fn escape_xml(s: &str) -> String {
     let mut result = String::with_capacity(s.len());
     for ch in s.chars() {
@@ -13,6 +15,55 @@ fn escape_xml(s: &str) -> String {
         }
     }
     result
+}
+
+fn escaped_xml_len(s: &str) -> usize {
+    s.chars()
+        .map(|ch| match ch {
+            '&' => 5,
+            '<' => 4,
+            '>' => 4,
+            '"' => 6,
+            '\'' => 6,
+            _ => 1,
+        })
+        .sum()
+}
+
+fn single_cell_row_inline_len(cell: &str, indent: usize) -> usize {
+    indent + "<row><cell></cell></row>".len() + escaped_xml_len(cell)
+}
+
+pub(crate) fn rendered_table_row_lines(row: &[String], indent: usize) -> usize {
+    if row.len() == 1 && single_cell_row_inline_len(&row[0], indent) <= MAX_INLINE_XML_LINE_LEN {
+        1
+    } else {
+        row.len() + 2
+    }
+}
+
+fn render_table_row(out: &mut String, row: &[String], indent: usize) {
+    let indent_str = " ".repeat(indent);
+    let cell_indent_str = " ".repeat(indent + 2);
+
+    if row.len() == 1 && single_cell_row_inline_len(&row[0], indent) <= MAX_INLINE_XML_LINE_LEN {
+        out.push_str(&format!(
+            "{}<row><cell>{}</cell></row>\n",
+            indent_str,
+            escape_xml(&row[0]),
+        ));
+        return;
+    }
+
+    out.push_str(&format!("{indent_str}<row>\n"));
+    for cell in row {
+        out.push_str(&format!(
+            "{}<cell>{}</cell>\n",
+            cell_indent_str,
+            escape_xml(cell)
+        ));
+    }
+    out.push_str(&format!("{indent_str}</row>\n"));
 }
 
 pub fn render_xml(page: &PageData) -> String {
@@ -93,11 +144,7 @@ pub fn render_block_xml(block: &BlockData) -> String {
             }
             out.push_str(">\n");
             for row in rows {
-                out.push_str("  <row>\n");
-                for cell in row {
-                    out.push_str(&format!("    <cell>{}</cell>\n", escape_xml(cell)));
-                }
-                out.push_str("  </row>\n");
+                render_table_row(&mut out, row, 2);
             }
             out.push_str("</block>\n");
         }
@@ -281,11 +328,7 @@ fn render_element(out: &mut String, element: &Element) {
             }
             out.push_str(">\n");
             for row in rows {
-                out.push_str("    <row>\n");
-                for cell in row {
-                    out.push_str(&format!("      <cell>{}</cell>\n", escape_xml(cell)));
-                }
-                out.push_str("    </row>\n");
+                render_table_row(out, row, 4);
             }
             out.push_str("  </table>\n");
         }
@@ -364,5 +407,36 @@ mod tests {
 
         assert!(xml.contains("<block id=\"b1\" kind=\"list\" current=\"2\" total=\"18\""));
         assert!(xml.contains("<item>First</item>"));
+    }
+
+    #[test]
+    fn render_xml_compacts_single_cell_rows_when_short() {
+        let xml = render_xml(&page(vec![Element::Table {
+            id: None,
+            rows: vec![vec!["Latest commit History38 Commits38 Commits".into()]],
+            truncated: false,
+            shown: 1,
+            total_items: 1,
+            current_page: 1,
+            total_pages: 1,
+        }]));
+
+        assert!(xml.contains("<row><cell>Latest commit History38 Commits38 Commits</cell></row>"));
+    }
+
+    #[test]
+    fn render_xml_expands_single_cell_rows_when_too_long() {
+        let xml = render_xml(&page(vec![Element::Table {
+            id: None,
+            rows: vec![vec!["x".repeat(200)]],
+            truncated: false,
+            shown: 1,
+            total_items: 1,
+            current_page: 1,
+            total_pages: 1,
+        }]));
+
+        assert!(xml.contains("    <row>\n"));
+        assert!(!xml.contains("<row><cell>"));
     }
 }

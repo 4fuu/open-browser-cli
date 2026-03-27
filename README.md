@@ -162,7 +162,7 @@ browser-cli teardown [--browser chrome|firefox]
   <button id="e2">Get Started</button>
   <input id="e3" type="text" placeholder="Search..."/>
   <checkbox id="e4" checked/>
-  <list id="b1" truncated="true" shown="20" total_items="42" current="1" total="3">
+  <list id="b1" truncated="true" shown="18" total_items="42" current="1" total="3">
     <item>Item one</item>
     <item>Item two</item>
   </list>
@@ -179,7 +179,7 @@ browser-cli teardown [--browser chrome|firefox]
 - `click` / `type` 默认仍输出整页 XML；可用 `--quiet` 只看成功结果，用 `--json` 获取结构化摘要，用 `--page-after` 在结构化返回中显式附带最新页面
 - `search` 会返回 `page`、`tag`、上下文摘要，以及命中交互元素时的 `element_id`
 - 长文本截断会明确显示为 `[...truncated]`
-- 超长 `list` / `table` 会在页面中先显示首段，并带上块级分页属性；可用 `browser-cli block <session-id> <块ID> --source-page <页码> -p <块页码>` 继续读取
+- 超长 `list` / `table` 会在页面中先显示首段，并带上块级分页属性；分页按渲染后的 XML 行数预算切分，而不是按条目数量硬切；可用 `browser-cli block <session-id> <块ID> --source-page <页码> -p <块页码>` 继续读取
 - `click --new-session` 仅对带 `href` 的链接生效；CLI 会把链接解析成绝对 URL，并直接创建一个新的 session，原页面保持不变
 
 ### 插件
