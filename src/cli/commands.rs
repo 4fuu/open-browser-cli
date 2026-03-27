@@ -20,11 +20,19 @@ pub async fn open(url: &str) -> Result<()> {
     let opened_url = data.get("url").and_then(|v| v.as_str()).unwrap_or(url);
     println!("Session {session_id} opened: {opened_url}");
 
-    let matching = crate::plugin::loader::find_matching_plugins(opened_url)?;
-    for plugin in matching {
-        if plugin.trigger == "on_load" {
-            eprintln!("Running plugin: {}", plugin.name);
-            crate::plugin::runner::run_plugin(&plugin, session_id).await?;
+    match crate::plugin::loader::find_matching_plugins(opened_url) {
+        Ok(matching) => {
+            for plugin in matching {
+                if plugin.trigger == "on_load" {
+                    eprintln!("Running plugin: {}", plugin.name);
+                    if let Err(err) = crate::plugin::runner::run_plugin(&plugin, session_id).await {
+                        eprintln!("warning: auto plugin '{}' failed: {err}", plugin.name);
+                    }
+                }
+            }
+        }
+        Err(err) => {
+            eprintln!("warning: failed to load auto plugins: {err}");
         }
     }
 

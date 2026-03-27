@@ -22,12 +22,42 @@ pub struct Step {
     pub value: Option<String>,
 }
 
-fn plugins_dir() -> Result<PathBuf> {
-    let home = std::env::var("HOME").context("HOME environment variable not set")?;
-    Ok(PathBuf::from(home).join(".config/browser-cli/plugins"))
+fn config_dir_from_env<F>(get_env: F, is_windows: bool) -> Result<PathBuf>
+where
+    F: Fn(&str) -> Option<String>,
+{
+    if is_windows {
+        if let Some(appdata) = get_env("APPDATA").filter(|value| !value.is_empty()) {
+            return Ok(PathBuf::from(appdata));
+        }
+
+        if let Some(user_profile) = get_env("USERPROFILE").filter(|value| !value.is_empty()) {
+            return Ok(PathBuf::from(user_profile).join("AppData/Roaming"));
+        }
+
+        anyhow::bail!("APPDATA or USERPROFILE environment variable not set");
+    }
+
+    if let Some(xdg_config_home) = get_env("XDG_CONFIG_HOME").filter(|value| !value.is_empty()) {
+        return Ok(PathBuf::from(xdg_config_home));
+    }
+
+    if let Some(home) = get_env("HOME").filter(|value| !value.is_empty()) {
+        return Ok(PathBuf::from(home).join(".config"));
+    }
+
+    anyhow::bail!("XDG_CONFIG_HOME or HOME environment variable not set");
 }
 
-/// Load a plugin by name from ~/.config/browser-cli/plugins/<name>.toml
+fn browser_cli_config_dir() -> Result<PathBuf> {
+    config_dir_from_env(|key| std::env::var(key).ok(), cfg!(windows))
+}
+
+fn plugins_dir() -> Result<PathBuf> {
+    Ok(browser_cli_config_dir()?.join("browser-cli/plugins"))
+}
+
+/// Load a plugin by name from the browser-cli config directory.
 pub fn load_plugin(name: &str) -> Result<Plugin> {
     let path = plugins_dir()?.join(format!("{name}.toml"));
     if !path.exists() {
@@ -45,7 +75,7 @@ pub fn load_plugin_from_path(path: &Path) -> Result<Plugin> {
     Ok(plugin)
 }
 
-/// List all available plugins from ~/.config/browser-cli/plugins/
+/// List all available plugins from the browser-cli config directory.
 pub fn list_plugins() -> Result<Vec<Plugin>> {
     let dir = plugins_dir()?;
     if !dir.exists() {
@@ -149,6 +179,69 @@ wait = "1000"
     }
 
     #[test]
+    fn test_config_dir_from_env_windows_prefers_appdata() {
+        let dir = config_dir_from_env(
+            |key| match key {
+                "APPDATA" => Some(r"C:\Users\alice\AppData\Roaming".to_string()),
+                "USERPROFILE" => Some(r"C:\Users\alice".to_string()),
+                _ => None,
+            },
+            true,
+        )
+        .unwrap();
+
+        assert_eq!(dir, PathBuf::from(r"C:\Users\alice\AppData\Roaming"));
+    }
+
+    #[test]
+    fn test_config_dir_from_env_windows_falls_back_to_userprofile() {
+        let dir = config_dir_from_env(
+            |key| match key {
+                "USERPROFILE" => Some(r"C:\Users\alice".to_string()),
+                _ => None,
+            },
+            true,
+        )
+        .unwrap();
+
+        assert_eq!(
+            dir,
+            PathBuf::from(r"C:\Users\alice")
+                .join("AppData")
+                .join("Roaming")
+        );
+    }
+
+    #[test]
+    fn test_config_dir_from_env_unix_prefers_xdg() {
+        let dir = config_dir_from_env(
+            |key| match key {
+                "XDG_CONFIG_HOME" => Some("/tmp/xdg-config".to_string()),
+                "HOME" => Some("/home/alice".to_string()),
+                _ => None,
+            },
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(dir, PathBuf::from("/tmp/xdg-config"));
+    }
+
+    #[test]
+    fn test_config_dir_from_env_unix_falls_back_to_home() {
+        let dir = config_dir_from_env(
+            |key| match key {
+                "HOME" => Some("/home/alice".to_string()),
+                _ => None,
+            },
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(dir, PathBuf::from("/home/alice/.config"));
+    }
+
+    #[test]
     fn test_parse_valid_plugin() {
         let plugin: Plugin = toml::from_str(sample_toml()).unwrap();
         assert_eq!(plugin.name, "skip-cookie-banner");
@@ -206,10 +299,7 @@ wait = "1000"
 
     #[test]
     fn test_load_plugin_from_path() {
-        let dir = std::env::temp_dir().join(format!(
-            "browser-cli-test-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let dir = std::env::temp_dir().join(format!("browser-cli-test-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&dir).unwrap();
         let path = dir.join("test-plugin.toml");
         fs::write(&path, sample_toml()).unwrap();
@@ -222,10 +312,7 @@ wait = "1000"
 
     #[test]
     fn test_list_plugins_empty_dir() {
-        let dir = std::env::temp_dir().join(format!(
-            "browser-cli-test-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let dir = std::env::temp_dir().join(format!("browser-cli-test-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&dir).unwrap();
 
         // list_plugins uses the real config dir, so just ensure it doesn't panic
