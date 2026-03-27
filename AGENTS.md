@@ -75,7 +75,7 @@ browser-cli <命令>          ← CLI 模式（每次命令短连接）
 browser-cli relay           ← Relay 模式（由 Chrome 通过 Native Messaging 拉起）
   │ stdin/stdout Native Messaging（4 字节长度前缀 + JSON）
   ▼
-Chrome Service Worker       ← 浏览器扩展后台
+Chrome / Firefox 后台脚本  ← 浏览器扩展后台
   │ chrome.tabs.sendMessage
   ▼
 Content Script              ← 注入到目标页面
@@ -330,11 +330,11 @@ struct SessionCache {
 | 组件 | 选型 |
 |------|------|
 | 目标浏览器 | Chrome Manifest V3，架构兼容 Firefox |
-| 后台脚本 | Service Worker |
+| 后台脚本 | Chrome Service Worker / Firefox background script |
 | DOM 操作 | Content Script，原生 DOM API |
 | 构建 | esbuild（无框架，原生 TypeScript）|
 
-### Service Worker 职责
+### 后台脚本职责
 
 - 通过 `chrome.runtime.connectNative("com.browser_cli.relay")` 连接 Relay
 - 接收 Relay 发来的请求，路由到对应 tab 的 Content Script
@@ -357,7 +357,7 @@ struct SessionCache {
 
 **分段发送（`streamSnapshot`）：**
 
-每 100 个节点一个 chunk，通过 `chrome.runtime.sendMessage` 发给 Service Worker，
+每 100 个节点一个 chunk，通过 `chrome.runtime.sendMessage` 发给后台脚本，
 chunk 间隔 8ms sleep。首个 chunk 携带 meta，最后一个 chunk `done: true`。
 
 **交互执行：**
@@ -388,7 +388,7 @@ chunk 间隔 8ms sleep。首个 chunk 携带 meta，最后一个 chunk `done: tr
 Relay 和 CLI 无需修改。扩展差异：
 - API 命名空间：`chrome.*` → `browser.*`（Promise-based），可用 polyfill 兼容
 - Native Messaging 注册：`allowed_origins` → `allowed_extensions`（CLI `setup --browser firefox` 已处理）
-- 后台脚本：Firefox 支持 persistent background script，无 Service Worker 生命周期限制
+- 后台脚本：Manifest 同时声明 `background.scripts` 和 `background.service_worker`，Firefox 走 background script，Chrome 走 Service Worker
 
 ---
 

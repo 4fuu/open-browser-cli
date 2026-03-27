@@ -6,12 +6,14 @@
   "scripts": {
     "build": "node build.js",
     "pack": "node build.js && node pack.js",
+    "sign:firefox": "node build.js && web-ext sign --channel=unlisted --source-dir . --artifacts-dir dist/firefox-signed",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
     "@types/chrome": "^0.1.29",
     "archiver": "^7.0.1",
     "esbuild": "^0.25.11",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "web-ext": "^8.10.0"
   }
 }

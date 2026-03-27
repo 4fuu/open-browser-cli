@@ -19,7 +19,6 @@ struct Cli {
 enum BrowserKind {
     Chrome,
     Firefox,
-    UngoogledChromium,
 }
 
 #[derive(Subcommand)]
@@ -176,7 +175,6 @@ async fn main() -> anyhow::Result<()> {
             let browser = match browser {
                 BrowserKind::Chrome => "chrome",
                 BrowserKind::Firefox => "firefox",
-                BrowserKind::UngoogledChromium => "ungoogled-chromium",
             };
             let resolved_path = user_data_dir
                 .as_deref()
@@ -192,7 +190,6 @@ async fn main() -> anyhow::Result<()> {
             let browser = match browser {
                 BrowserKind::Chrome => "chrome",
                 BrowserKind::Firefox => "firefox",
-                BrowserKind::UngoogledChromium => "ungoogled-chromium",
             };
             let resolved_path = user_data_dir
                 .as_deref()

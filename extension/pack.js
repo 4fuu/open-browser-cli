@@ -31,5 +31,5 @@ const [zipBytes, xpiBytes] = await Promise.all([
   pack(resolve('dist/browser-cli-extension.xpi')),
 ]);
 
-console.log(`Packed ${zipBytes} bytes  → dist/browser-cli-extension.zip  (Chrome / ungoogled-chromium)`);
-console.log(`Packed ${xpiBytes} bytes  → dist/browser-cli-extension.xpi  (Firefox)`);
+console.log(`Packed ${zipBytes} bytes  → dist/browser-cli-extension.zip  (Chrome)`);
+console.log(`Packed ${xpiBytes} bytes  → dist/browser-cli-extension.xpi  (Firefox unsigned package)`);

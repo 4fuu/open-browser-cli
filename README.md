@@ -8,10 +8,10 @@
 browser-cli <命令>
   │ TCP 127.0.0.1:12899
   ▼
-browser-cli relay          ← 由 Chrome 通过 Native Messaging 拉起
+browser-cli relay          ← 由浏览器扩展通过 Native Messaging 拉起
   │ stdin/stdout
   ▼
-Chrome 扩展 Service Worker
+浏览器扩展后台脚本
   │
   ▼
 Content Script（注入目标页面）
@@ -46,8 +46,7 @@ npm run pack         # 编译并打包，产物：extension/dist/browser-cli-ext
 **打包模式：**
 
 运行 `npm run pack` 同时生成：
-- `extension/dist/browser-cli-extension.zip` — Chrome / ungoogled-chromium，拖入 `chrome://extensions` 安装
-- `extension/dist/browser-cli-extension.xpi` — Firefox，拖入 `about:addons` 安装（需要 Firefox Developer Edition，或在 `about:config` 将 `xpinstall.signatures.required` 设为 `false`）
+- `extension/dist/browser-cli-extension.zip` — Chrome 扩展包
 
 记录扩展 ID（形如 `abcdefghijklmnopabcdefghijklmnop`）。
 
@@ -55,20 +54,6 @@ npm run pack         # 编译并打包，产物：extension/dist/browser-cli-ext
 
 ```bash
 browser-cli setup --extension-id <扩展ID>
-```
-
-Firefox：
-
-```bash
-browser-cli setup --browser firefox
-```
-
-Firefox 扩展 ID 固定为 `browser-cli@browser-cli`（已写入 manifest），无需手动指定。
-
-ungoogled-chromium：
-
-```bash
-browser-cli setup --browser ungoogled-chromium --extension-id <扩展ID>
 ```
 
 注册文件写入后，**重启浏览器** 使配置生效。如需卸载，执行对应的 `teardown` 命令：
@@ -117,8 +102,8 @@ browser-cli wait <session-id> [--selector <CSS选择器>] [--timeout <毫秒>]
 browser-cli plugin list
 browser-cli plugin run <名称> <session-id>
 
-browser-cli setup [--browser chrome|firefox|ungoogled-chromium] [--extension-id <ID>] [--manifest-path <路径>]
-browser-cli teardown [--browser chrome|firefox|ungoogled-chromium] [--manifest-path <路径>]
+browser-cli setup [--browser chrome] [--extension-id <ID>] [--manifest-path <路径>]
+browser-cli teardown [--browser chrome] [--manifest-path <路径>]
 ```
 
 ### 页面输出格式

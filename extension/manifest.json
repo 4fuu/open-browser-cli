@@ -5,6 +5,7 @@
   "description": "Browser session CLI extension",
   "permissions": ["nativeMessaging", "tabs", "scripting", "storage"],
   "background": {
+    "scripts": ["dist/background/service-worker.js"],
     "service_worker": "dist/background/service-worker.js"
   },
   "content_scripts": [

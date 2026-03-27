@@ -282,7 +282,6 @@ fn write_windows_registry(browser: &str, manifest_path: &Path) -> Result<()> {
     let reg_path = match browser {
         "chrome" => r"Software\Google\Chrome\NativeMessagingHosts\com.browser_cli.relay",
         "firefox" => r"Software\Mozilla\NativeMessagingHosts\com.browser_cli.relay",
-        "ungoogled-chromium" => r"Software\Chromium\NativeMessagingHosts\com.browser_cli.relay",
         _ => return Ok(()),
     };
 
@@ -301,7 +300,6 @@ fn delete_windows_registry(browser: &str) -> Result<()> {
     let reg_path = match browser {
         "chrome" => r"Software\Google\Chrome\NativeMessagingHosts\com.browser_cli.relay",
         "firefox" => r"Software\Mozilla\NativeMessagingHosts\com.browser_cli.relay",
-        "ungoogled-chromium" => r"Software\Chromium\NativeMessagingHosts\com.browser_cli.relay",
         _ => return Ok(()),
     };
 
@@ -327,9 +325,6 @@ fn native_host_manifest_path(browser: &str) -> Result<PathBuf> {
             "firefox" => Ok(appdata.join(
                 r"Mozilla\NativeMessagingHosts\com.browser_cli.relay.json",
             )),
-            "ungoogled-chromium" => Ok(appdata.join(
-                r"Chromium\NativeMessagingHosts\com.browser_cli.relay.json",
-            )),
             other => bail!("unsupported browser: {other}"),
         }
     }
@@ -342,9 +337,6 @@ fn native_host_manifest_path(browser: &str) -> Result<PathBuf> {
             )),
             "firefox" => Ok(home.join(
                 ".mozilla/native-messaging-hosts/com.browser_cli.relay.json",
-            )),
-            "ungoogled-chromium" => Ok(home.join(
-                ".config/chromium/NativeMessagingHosts/com.browser_cli.relay.json",
             )),
             other => bail!("unsupported browser: {other}"),
         }
@@ -377,16 +369,6 @@ fn build_native_host_manifest(
                 "path": relay_path,
                 "type": "stdio",
                 "allowed_extensions": [extension_id],
-            })
-        }
-        "ungoogled-chromium" => {
-            let extension_id = extension_id.unwrap_or(CHROME_EXTENSION_PLACEHOLDER);
-            json!({
-                "name": NATIVE_HOST_NAME,
-                "description": "Browser CLI relay",
-                "path": relay_path,
-                "type": "stdio",
-                "allowed_origins": [format!("chrome-extension://{extension_id}/")],
             })
         }
         _ => unreachable!("native host manifest is only built for supported browsers"),
