@@ -55,7 +55,7 @@ brew install browser-cli
 **Windows（Scoop）：**
 
 ```powershell
-scoop bucket add 4fuu https://github.com/4fuu/open-browser-cli
+scoop bucket add open-browser-cli https://github.com/4fuu/open-browser-cli
 scoop install browser-cli
 ```
 
