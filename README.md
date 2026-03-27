@@ -47,9 +47,7 @@ npm run pack         # 编译并打包，产物：extension/dist/browser-cli-ext
 
 **Firefox：**
 
-从 [Releases](../../releases) 下载 `.xpi` 文件，在 Firefox 打开 `about:addons`，点击齿轮图标 → 「从文件安装附加组件」，选择 `.xpi` 文件完成安装。
-
-记录扩展 ID（可在 `about:addons` 中扩展详情页查看，形如 `4fu@browser-cli`）。
+从 [Releases](../../releases) 下载 `.xpi` 文件，在 Firefox 打开 `about:addons`，点击齿轮图标 → 「从文件安装附加组件」，选择 `.xpi` 文件完成安装。扩展 ID 已固定为 `4fu@browser-cli`，无需手动记录。
 
 ### 2. 注册 Native Messaging Host
 
@@ -62,7 +60,7 @@ browser-cli setup --extension-id <扩展ID>
 **Firefox：**
 
 ```bash
-browser-cli setup --browser firefox --extension-id <扩展ID>
+browser-cli setup --browser firefox
 ```
 
 注册文件写入后，**重启浏览器** 使配置生效。如需卸载：

@@ -9,7 +9,7 @@ use crate::transport::client::send_request;
 
 const NATIVE_HOST_NAME: &str = "com.browser_cli.relay";
 const CHROME_EXTENSION_PLACEHOLDER: &str = "REPLACE_WITH_EXTENSION_ID";
-const FIREFOX_EXTENSION_PLACEHOLDER: &str = "browser-cli@browser-cli";
+const FIREFOX_EXTENSION_PLACEHOLDER: &str = "4fu@browser-cli";
 
 pub async fn open(url: &str) -> Result<()> {
     let data = send_ok(Request::new(actions::OPEN, json!({ "url": url }))).await?;
