@@ -1,0 +1,18 @@
+{
+  "manifest_version": 3,
+  "name": "Browser CLI",
+  "version": "0.1.0",
+  "description": "Browser session CLI extension",
+  "permissions": ["nativeMessaging", "tabs", "scripting", "storage"],
+  "background": {
+    "service_worker": "dist/background/service-worker.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["dist/content/content-script.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
