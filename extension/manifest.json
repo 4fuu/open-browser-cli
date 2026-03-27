@@ -17,7 +17,7 @@
   ],
   "browser_specific_settings": {
     "gecko": {
-      "id": "browser-cli@browser-cli",
+      "id": "4fu@browser-cli",
       "strict_min_version": "109.0"
     }
   }
