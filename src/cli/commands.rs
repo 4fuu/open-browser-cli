@@ -155,7 +155,7 @@ pub async fn click(session_id: &str, element_id: u32, page_num: Option<u32>) -> 
     ))
     .await?;
 
-    let snapshot = fetch_snapshot(session_id, actions::GET_PAGE).await?;
+    let snapshot = fetch_snapshot(session_id, actions::GET_PAGE_FRESH).await?;
     let updated = parse_page_from_snapshot(&snapshot, page_num)?;
     println!("{}", crate::cli::output::format_page(&updated, false));
     Ok(())
@@ -181,7 +181,7 @@ pub async fn type_text(
     ))
     .await?;
 
-    let snapshot = fetch_snapshot(session_id, actions::GET_PAGE).await?;
+    let snapshot = fetch_snapshot(session_id, actions::GET_PAGE_FRESH).await?;
     let updated = parse_page_from_snapshot(&snapshot, page_num)?;
     println!("{}", crate::cli::output::format_page(&updated, false));
     Ok(())
