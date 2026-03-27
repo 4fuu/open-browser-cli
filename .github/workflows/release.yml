@@ -1,0 +1,148 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version tag (e.g. v0.2.0)"
+        required: true
+        type: string
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            archive: tar.gz
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            archive: tar.gz
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            archive: tar.gz
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            archive: tar.gz
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            archive: zip
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install cross-compile toolchain (aarch64 Linux)
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
+
+      - name: Add Rust target
+        run: rustup target add ${{ matrix.target }}
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-${{ matrix.target }}-cargo-
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Package (Unix)
+        if: matrix.archive == 'tar.gz'
+        run: |
+          BIN="target/${{ matrix.target }}/release/browser-cli"
+          ARCHIVE="browser-cli-${{ matrix.target }}.tar.gz"
+          tar -czf "$ARCHIVE" -C "$(dirname $BIN)" "$(basename $BIN)"
+          echo "ASSET=$ARCHIVE" >> $GITHUB_ENV
+
+      - name: Package (Windows)
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        run: |
+          $bin = "target\${{ matrix.target }}\release\browser-cli.exe"
+          $archive = "browser-cli-${{ matrix.target }}.zip"
+          Compress-Archive -Path $bin -DestinationPath $archive
+          echo "ASSET=$archive" >> $env:GITHUB_ENV
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: ${{ env.ASSET }}
+
+  release:
+    name: Create Release & Update Manifests
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ inputs.version }}" \
+            --title "${{ inputs.version }}" \
+            --generate-notes \
+            artifacts/*
+
+      - name: Compute SHA256 hashes
+        id: hashes
+        run: |
+          sha256() { sha256sum "$1" | awk '{print $1}'; }
+          echo "win_x86=$(sha256 artifacts/browser-cli-x86_64-pc-windows-msvc.zip)" >> $GITHUB_OUTPUT
+          echo "linux_x86=$(sha256 artifacts/browser-cli-x86_64-unknown-linux-gnu.tar.gz)" >> $GITHUB_OUTPUT
+          echo "linux_arm64=$(sha256 artifacts/browser-cli-aarch64-unknown-linux-gnu.tar.gz)" >> $GITHUB_OUTPUT
+          echo "macos_x86=$(sha256 artifacts/browser-cli-x86_64-apple-darwin.tar.gz)" >> $GITHUB_OUTPUT
+          echo "macos_arm64=$(sha256 artifacts/browser-cli-aarch64-apple-darwin.tar.gz)" >> $GITHUB_OUTPUT
+
+      - name: Update Scoop manifest
+        env:
+          VERSION: ${{ inputs.version }}
+          WIN_X86: ${{ steps.hashes.outputs.win_x86 }}
+        run: |
+          VER="${VERSION#v}"
+          sed -i "s|\"version\": \".*\"|\"version\": \"$VER\"|" bucket/browser-cli.json
+          sed -i "s|/download/v[^/]*/|/download/$VERSION/|g" bucket/browser-cli.json
+          sed -i "s|\"hash\": \".*\"|\"hash\": \"$WIN_X86\"|" bucket/browser-cli.json
+
+      - name: Update Homebrew formula
+        env:
+          VERSION: ${{ inputs.version }}
+          MACOS_ARM64: ${{ steps.hashes.outputs.macos_arm64 }}
+          MACOS_X86: ${{ steps.hashes.outputs.macos_x86 }}
+          LINUX_ARM64: ${{ steps.hashes.outputs.linux_arm64 }}
+          LINUX_X86: ${{ steps.hashes.outputs.linux_x86 }}
+        run: |
+          VER="${VERSION#v}"
+          sed -i "s|version \".*\"|version \"$VER\"|" Formula/browser-cli.rb
+          sed -i "s|/download/v[^/]*/|/download/$VERSION/|g" Formula/browser-cli.rb
+          sed -i "s|sha256 \".*\" # macos_arm64|sha256 \"$MACOS_ARM64\" # macos_arm64|" Formula/browser-cli.rb
+          sed -i "s|sha256 \".*\" # macos_x86|sha256 \"$MACOS_X86\" # macos_x86|" Formula/browser-cli.rb
+          sed -i "s|sha256 \".*\" # linux_arm64|sha256 \"$LINUX_ARM64\" # linux_arm64|" Formula/browser-cli.rb
+          sed -i "s|sha256 \".*\" # linux_x86|sha256 \"$LINUX_X86\" # linux_x86|" Formula/browser-cli.rb
+
+      - name: Commit updated manifests
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add bucket/browser-cli.json Formula/browser-cli.rb
+          git commit -m "chore: update manifests to ${{ inputs.version }}"
+          git push

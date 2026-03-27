@@ -17,27 +17,42 @@ browser-cli relay          ← 由浏览器扩展通过 Native Messaging 拉起
 Content Script（注入目标页面）
 ```
 
-## 构建
-
-**CLI（Rust）：**
-
-```bash
-cargo build --release
-# 产物：target/release/browser-cli
-```
-
-**浏览器扩展：**
-
-```bash
-cd extension
-npm install
-npm run build        # 仅编译，产物：extension/dist/
-npm run pack         # 编译并打包，产物：extension/dist/browser-cli-extension.zip
-```
-
 ## 安装
 
-### 1. 加载扩展
+### 1. 安装 CLI
+
+**macOS / Linux：**
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/4fuu/open-browser-cli/main/install.sh | sh
+```
+
+**Homebrew：**
+
+```sh
+brew tap 4fuu/open-browser-cli https://github.com/4fuu/open-browser-cli
+brew install browser-cli
+```
+
+**Windows（Scoop）：**
+
+```powershell
+scoop bucket add 4fuu https://github.com/4fuu/open-browser-cli
+scoop install browser-cli
+```
+
+<details>
+<summary>Windows脚本安装</summary>
+
+**Windows（PowerShell）：**
+
+```powershell
+irm https://raw.githubusercontent.com/4fuu/open-browser-cli/main/install.ps1 | iex
+```
+
+</details>
+
+### 2. 加载扩展
 
 **Chrome：**
 
@@ -49,7 +64,7 @@ npm run pack         # 编译并打包，产物：extension/dist/browser-cli-ext
 
 从 [Releases](../../releases) 下载 `.xpi` 文件，在 Firefox 打开 `about:addons`，点击齿轮图标 → 「从文件安装附加组件」，选择 `.xpi` 文件完成安装。
 
-### 2. 注册 Native Messaging Host
+### 3. 注册 Native Messaging Host
 
 **Chrome：**
 
@@ -109,8 +124,8 @@ browser-cli wait <session-id> [--selector <CSS选择器>] [--timeout <毫秒>]
 browser-cli plugin list
 browser-cli plugin run <名称> <session-id>
 
-browser-cli setup [--browser chrome] [--extension-id <ID>] [--manifest-path <路径>]
-browser-cli teardown [--browser chrome] [--manifest-path <路径>]
+browser-cli setup [--browser chrome|firefox] [--extension-id <ID>]
+browser-cli teardown [--browser chrome|firefox]
 ```
 
 ### 页面输出格式
@@ -155,3 +170,21 @@ action = "click"
 - Relay 监听固定端口 `127.0.0.1:12899`，同一时间只运行一个实例
 - 元素 ID（`e1`, `e2`, ...）每次 `page` 后重新编号，操作前需先获取当前页面
 - `page --fresh` 用于动态页面需要绕过缓存的场景
+
+## 开发
+
+**CLI（Rust）：**
+
+```bash
+cargo build --release
+# 产物：target/release/browser-cli
+```
+
+**浏览器扩展：**
+
+```bash
+cd extension
+npm install
+npm run build   # 产物：extension/dist/
+npm run pack    # 打包为 extension/dist/browser-cli-extension.zip
+```
