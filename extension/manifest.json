@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Browser CLI",
-  "version": "0.1.0",
-  "description": "Browser session CLI extension",
+  "version": "0.2.0",
+  "description": "Bridges the browser to browser-cli: manages sessions, routes commands to content scripts, and streams structured page snapshots over Native Messaging.",
   "permissions": ["nativeMessaging", "tabs", "scripting", "storage"],
   "background": {
     "scripts": ["dist/background/service-worker.js"],
