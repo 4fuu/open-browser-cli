@@ -5,10 +5,12 @@
   "type": "module",
   "scripts": {
     "build": "node build.js",
+    "pack": "node build.js && node pack.js",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
     "@types/chrome": "^0.1.29",
+    "archiver": "^7.0.1",
     "esbuild": "^0.25.11",
     "typescript": "^5.9.3"
   }

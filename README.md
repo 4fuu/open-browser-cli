@@ -31,15 +31,21 @@ cargo build --release
 ```bash
 cd extension
 npm install
-npm run build
-# 产物：extension/dist/
+npm run build        # 仅编译，产物：extension/dist/
+npm run pack         # 编译并打包，产物：extension/dist/browser-cli-extension.zip
 ```
 
 ## 安装
 
 ### 1. 加载扩展
 
+**开发模式（未打包）：**
+
 在 Chrome 打开 `chrome://extensions`，开启「开发者模式」，点击「加载已解压的扩展程序」，选择 `extension/` 目录。
+
+**打包模式：**
+
+运行 `npm run pack` 生成 `extension/dist/browser-cli-extension.zip`，在 `chrome://extensions` 页面将 zip 文件拖入即可安装。
 
 记录扩展 ID（形如 `abcdefghijklmnopabcdefghijklmnop`）。
 
@@ -55,7 +61,17 @@ Firefox：
 browser-cli setup --browser firefox --extension-id <扩展ID@example>
 ```
 
-注册文件写入后，**重启 Chrome** 使配置生效。
+ungoogled-chromium：
+
+```bash
+browser-cli setup --browser ungoogled-chromium --extension-id <扩展ID>
+```
+
+注册文件写入后，**重启浏览器** 使配置生效。如需卸载，执行对应的 `teardown` 命令：
+
+```bash
+browser-cli teardown --browser chrome
+```
 
 ## 使用
 
@@ -96,6 +112,9 @@ browser-cli wait <session-id> [--selector <CSS选择器>] [--timeout <毫秒>]
 
 browser-cli plugin list
 browser-cli plugin run <名称> <session-id>
+
+browser-cli setup [--browser chrome|firefox|ungoogled-chromium] [--extension-id <ID>] [--manifest-path <路径>]
+browser-cli teardown [--browser chrome|firefox|ungoogled-chromium] [--manifest-path <路径>]
 ```
 
 ### 页面输出格式
