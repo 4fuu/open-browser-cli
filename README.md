@@ -45,7 +45,9 @@ npm run pack         # 编译并打包，产物：extension/dist/browser-cli-ext
 
 **打包模式：**
 
-运行 `npm run pack` 生成 `extension/dist/browser-cli-extension.zip`，在 `chrome://extensions` 页面将 zip 文件拖入即可安装。
+运行 `npm run pack` 同时生成：
+- `extension/dist/browser-cli-extension.zip` — Chrome / ungoogled-chromium，拖入 `chrome://extensions` 安装
+- `extension/dist/browser-cli-extension.xpi` — Firefox，拖入 `about:addons` 安装（需要 Firefox Developer Edition，或在 `about:config` 将 `xpinstall.signatures.required` 设为 `false`）
 
 记录扩展 ID（形如 `abcdefghijklmnopabcdefghijklmnop`）。
 
@@ -58,8 +60,10 @@ browser-cli setup --extension-id <扩展ID>
 Firefox：
 
 ```bash
-browser-cli setup --browser firefox --extension-id <扩展ID@example>
+browser-cli setup --browser firefox
 ```
+
+Firefox 扩展 ID 固定为 `browser-cli@browser-cli`（已写入 manifest），无需手动指定。
 
 ungoogled-chromium：
 

@@ -14,5 +14,11 @@
       "js": ["dist/content/content-script.js"],
       "run_at": "document_idle"
     }
-  ]
+  ],
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "browser-cli@browser-cli",
+      "strict_min_version": "109.0"
+    }
+  }
 }

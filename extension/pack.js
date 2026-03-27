@@ -4,23 +4,32 @@ import { resolve } from 'path';
 
 const distDir = resolve('dist');
 const manifestFile = resolve('manifest.json');
-const outFile = resolve('dist/browser-cli-extension.zip');
 
 if (!existsSync(distDir)) {
   console.error('dist/ not found — run npm run build first');
   process.exit(1);
 }
 
-const output = createWriteStream(outFile);
-const archive = archiver('zip', { zlib: { level: 9 } });
+function pack(outFile) {
+  return new Promise((res, rej) => {
+    const output = createWriteStream(outFile);
+    const archive = archiver('zip', { zlib: { level: 9 } });
+    output.on('close', () => res(archive.pointer()));
+    archive.on('error', rej);
+    archive.pipe(output);
+    archive.file(manifestFile, { name: 'manifest.json' });
+    // exclude any previously generated zip/xpi from the dist dir
+    archive.directory(distDir, false, (entry) =>
+      /\.(zip|xpi)$/.test(entry.name) ? false : entry,
+    );
+    archive.finalize();
+  });
+}
 
-output.on('close', () => {
-  console.log(`Packed ${archive.pointer()} bytes → dist/browser-cli-extension.zip`);
-});
+const [zipBytes, xpiBytes] = await Promise.all([
+  pack(resolve('dist/browser-cli-extension.zip')),
+  pack(resolve('dist/browser-cli-extension.xpi')),
+]);
 
-archive.on('error', (err) => { throw err; });
-
-archive.pipe(output);
-archive.file(manifestFile, { name: 'manifest.json' });
-archive.directory(distDir, false, (entry) => entry.name.endsWith('.zip') ? false : entry);
-archive.finalize();
+console.log(`Packed ${zipBytes} bytes  → dist/browser-cli-extension.zip  (Chrome / ungoogled-chromium)`);
+console.log(`Packed ${xpiBytes} bytes  → dist/browser-cli-extension.xpi  (Firefox)`);
