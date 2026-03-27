@@ -2,4 +2,4 @@ target/
 Cargo.lock
 extension/node_modules/
 extension/dist/
-
+extension/.amo-upload-uuid

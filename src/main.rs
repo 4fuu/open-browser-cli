@@ -6,6 +6,7 @@ mod relay;
 mod transport;
 
 use clap::{Parser, Subcommand, ValueEnum};
+use std::io::IsTerminal;
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -162,7 +163,17 @@ enum PluginCommand {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let cli = Cli::parse();
+    let args: Vec<String> = std::env::args().collect();
+    let cli = match Cli::try_parse_from(&args) {
+        Ok(cli) => cli,
+        Err(err) => {
+            if should_run_as_native_host(&args) {
+                relay::server::run().await?;
+                return Ok(());
+            }
+            return Err(err.into());
+        }
+    };
 
     match cli.command {
         Command::Relay => relay::server::run().await?,
@@ -246,4 +257,41 @@ async fn main() -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+fn should_run_as_native_host(args: &[String]) -> bool {
+    if std::io::stdin().is_terminal() || std::io::stdout().is_terminal() {
+        return false;
+    }
+
+    if args.len() <= 1 {
+        return true;
+    }
+
+    args.iter().skip(1).any(|arg| {
+        arg.starts_with("chrome-extension://")
+            || arg.starts_with("moz-extension://")
+            || arg.starts_with("--parent-window=")
+            || arg.ends_with(".json")
+            || arg.contains('@')
+            || arg.chars().all(|c| c.is_ascii_digit())
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_run_as_native_host;
+
+    #[test]
+    fn native_host_detection_matches_browser_args() {
+        assert!(should_run_as_native_host(&[
+            "browser-cli".into(),
+            "chrome-extension://abcdefghijklmnop/".into(),
+        ]));
+        assert!(should_run_as_native_host(&[
+            "browser-cli".into(),
+            "browser-cli@browser-cli".into(),
+            "/tmp/com.browser_cli.relay.json".into(),
+        ]));
+    }
 }
