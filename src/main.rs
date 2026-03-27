@@ -35,8 +35,11 @@ enum Command {
         #[arg(long)]
         extension_id: Option<String>,
         /// Override the manifest file path instead of using the default location.
-        #[arg(long)]
+        #[arg(long, conflicts_with = "user_data_dir")]
         manifest_path: Option<PathBuf>,
+        /// Write manifest into <user-data-dir>/NativeMessagingHosts/ (for portable installs with custom --user-data-dir).
+        #[arg(long, conflicts_with = "manifest_path")]
+        user_data_dir: Option<PathBuf>,
     },
     /// Remove the Native Messaging host manifest (and registry key on Windows)
     Teardown {
@@ -44,8 +47,11 @@ enum Command {
         #[arg(long, value_enum, default_value_t = BrowserKind::Chrome)]
         browser: BrowserKind,
         /// Override the manifest file path instead of using the default location.
-        #[arg(long)]
+        #[arg(long, conflicts_with = "user_data_dir")]
         manifest_path: Option<PathBuf>,
+        /// Remove manifest from <user-data-dir>/NativeMessagingHosts/.
+        #[arg(long, conflicts_with = "manifest_path")]
+        user_data_dir: Option<PathBuf>,
     },
     /// Open a URL in the browser
     Open {
@@ -165,24 +171,34 @@ async fn main() -> anyhow::Result<()> {
             browser,
             ref extension_id,
             ref manifest_path,
+            ref user_data_dir,
         } => {
             let browser = match browser {
                 BrowserKind::Chrome => "chrome",
                 BrowserKind::Firefox => "firefox",
                 BrowserKind::UngoogledChromium => "ungoogled-chromium",
             };
-            cli::commands::setup(browser, extension_id.as_deref(), manifest_path.as_deref())?
+            let resolved_path = user_data_dir
+                .as_deref()
+                .map(|d| d.join("NativeMessagingHosts").join("com.browser_cli.relay.json"))
+                .or_else(|| manifest_path.clone());
+            cli::commands::setup(browser, extension_id.as_deref(), resolved_path.as_deref())?
         }
         Command::Teardown {
             browser,
             ref manifest_path,
+            ref user_data_dir,
         } => {
             let browser = match browser {
                 BrowserKind::Chrome => "chrome",
                 BrowserKind::Firefox => "firefox",
                 BrowserKind::UngoogledChromium => "ungoogled-chromium",
             };
-            cli::commands::teardown(browser, manifest_path.as_deref())?
+            let resolved_path = user_data_dir
+                .as_deref()
+                .map(|d| d.join("NativeMessagingHosts").join("com.browser_cli.relay.json"))
+                .or_else(|| manifest_path.clone());
+            cli::commands::teardown(browser, resolved_path.as_deref())?
         }
         Command::Open { ref url } => cli::commands::open(url).await?,
         Command::Close {

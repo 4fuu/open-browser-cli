@@ -32,6 +32,8 @@ pub async fn open(url: &str) -> Result<()> {
 }
 
 pub fn setup(browser: &str, extension_id: Option<&str>, manifest_path: Option<&Path>) -> Result<()> {
+    #[cfg(target_os = "windows")]
+    let use_registry = manifest_path.is_none();
     let manifest_path = match manifest_path {
         Some(p) => p.to_path_buf(),
         None => native_host_manifest_path(browser)?,
@@ -45,7 +47,9 @@ pub fn setup(browser: &str, extension_id: Option<&str>, manifest_path: Option<&P
     fs::write(&manifest_path, serde_json::to_string_pretty(&manifest)?)?;
 
     #[cfg(target_os = "windows")]
-    write_windows_registry(browser, &manifest_path)?;
+    if use_registry {
+        write_windows_registry(browser, &manifest_path)?;
+    }
 
     println!("Wrote native host manifest: {}", manifest_path.display());
     if extension_id.is_none() {
@@ -56,6 +60,8 @@ pub fn setup(browser: &str, extension_id: Option<&str>, manifest_path: Option<&P
 }
 
 pub fn teardown(browser: &str, manifest_path: Option<&Path>) -> Result<()> {
+    #[cfg(target_os = "windows")]
+    let use_registry = manifest_path.is_none();
     let manifest_path = match manifest_path {
         Some(p) => p.to_path_buf(),
         None => native_host_manifest_path(browser)?,
@@ -69,7 +75,9 @@ pub fn teardown(browser: &str, manifest_path: Option<&Path>) -> Result<()> {
     }
 
     #[cfg(target_os = "windows")]
-    delete_windows_registry(browser)?;
+    if use_registry {
+        delete_windows_registry(browser)?;
+    }
 
     Ok(())
 }
