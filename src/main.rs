@@ -10,7 +10,10 @@ use std::io::IsTerminal;
 use std::path::PathBuf;
 
 #[derive(Parser)]
-#[command(name = "browser-cli", about = "Browser session CLI with Native Messaging relay")]
+#[command(
+    name = "browser-cli",
+    about = "Browser session CLI with Native Messaging relay"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -97,6 +100,9 @@ enum Command {
         /// Page number used to resolve element IDs
         #[arg(short, long)]
         page: Option<u32>,
+        /// Open link targets in a new session instead of navigating the current one
+        #[arg(long)]
+        new_session: bool,
     },
     /// Type text into an input element
     Type {
@@ -189,7 +195,10 @@ async fn main() -> anyhow::Result<()> {
             };
             let resolved_path = user_data_dir
                 .as_deref()
-                .map(|d| d.join("NativeMessagingHosts").join("com.browser_cli.relay.json"))
+                .map(|d| {
+                    d.join("NativeMessagingHosts")
+                        .join("com.browser_cli.relay.json")
+                })
                 .or_else(|| manifest_path.clone());
             cli::commands::setup(browser, extension_id.as_deref(), resolved_path.as_deref())?
         }
@@ -204,7 +213,10 @@ async fn main() -> anyhow::Result<()> {
             };
             let resolved_path = user_data_dir
                 .as_deref()
-                .map(|d| d.join("NativeMessagingHosts").join("com.browser_cli.relay.json"))
+                .map(|d| {
+                    d.join("NativeMessagingHosts")
+                        .join("com.browser_cli.relay.json")
+                })
                 .or_else(|| manifest_path.clone());
             cli::commands::teardown(browser, resolved_path.as_deref())?
         }
@@ -226,7 +238,8 @@ async fn main() -> anyhow::Result<()> {
             ref session_id,
             id,
             page,
-        } => cli::commands::click(session_id, id, page).await?,
+            new_session,
+        } => cli::commands::click(session_id, id, page, new_session).await?,
         Command::Type {
             ref session_id,
             id,

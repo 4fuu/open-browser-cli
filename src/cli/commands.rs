@@ -2,8 +2,9 @@ use anyhow::{Result, bail};
 use serde_json::json;
 use std::fs;
 use std::path::{Path, PathBuf};
+use url::Url;
 
-use crate::page::structure::{parse_page_from_snapshot, parse_snapshot, search_snapshot};
+use crate::page::structure::{Element, parse_page_from_snapshot, parse_snapshot, search_snapshot};
 use crate::protocol::messages::{Request, Response, actions};
 use crate::transport::client::send_request;
 
@@ -12,14 +13,30 @@ const CHROME_EXTENSION_PLACEHOLDER: &str = "REPLACE_WITH_EXTENSION_ID";
 const FIREFOX_EXTENSION_PLACEHOLDER: &str = "4fu@browser-cli";
 
 pub async fn open(url: &str) -> Result<()> {
+    let (session_id, opened_url) = open_session(url).await?;
+    println!("Session {session_id} opened: {opened_url}");
+    Ok(())
+}
+
+async fn open_session(url: &str) -> Result<(String, String)> {
     let data = send_ok(Request::new(actions::OPEN, json!({ "url": url }))).await?;
     let session_id = data
         .get("session_id")
         .and_then(|v| v.as_str())
-        .unwrap_or("unknown");
-    let opened_url = data.get("url").and_then(|v| v.as_str()).unwrap_or(url);
-    println!("Session {session_id} opened: {opened_url}");
+        .unwrap_or("unknown")
+        .to_string();
+    let opened_url = data
+        .get("url")
+        .and_then(|v| v.as_str())
+        .unwrap_or(url)
+        .to_string();
 
+    run_on_load_plugins(&session_id, &opened_url).await;
+
+    Ok((session_id, opened_url))
+}
+
+async fn run_on_load_plugins(session_id: &str, opened_url: &str) {
     match crate::plugin::loader::find_matching_plugins(opened_url) {
         Ok(matching) => {
             for plugin in matching {
@@ -35,11 +52,13 @@ pub async fn open(url: &str) -> Result<()> {
             eprintln!("warning: failed to load auto plugins: {err}");
         }
     }
-
-    Ok(())
 }
 
-pub fn setup(browser: &str, extension_id: Option<&str>, manifest_path: Option<&Path>) -> Result<()> {
+pub fn setup(
+    browser: &str,
+    extension_id: Option<&str>,
+    manifest_path: Option<&Path>,
+) -> Result<()> {
     validate_setup_args(browser, extension_id)?;
 
     #[cfg(target_os = "windows")]
@@ -117,15 +136,26 @@ pub async fn list() -> Result<()> {
     Ok(())
 }
 
-pub async fn page(session_id: &str, page_num: Option<u32>, next: bool, prev: bool, fresh: bool, json_mode: bool) -> Result<()> {
-    let action = if fresh { actions::GET_PAGE_FRESH } else { actions::GET_PAGE };
+pub async fn page(
+    session_id: &str,
+    page_num: Option<u32>,
+    next: bool,
+    prev: bool,
+    fresh: bool,
+    json_mode: bool,
+) -> Result<()> {
+    let action = if fresh {
+        actions::GET_PAGE_FRESH
+    } else {
+        actions::GET_PAGE
+    };
     let snapshot = fetch_snapshot(session_id, action).await?;
     let resolved_page = if next || prev {
         let viewport_height = snapshot.viewport.height.max(1.0);
         let scroll_height = snapshot.scroll.height.max(viewport_height);
         let total_pages = (scroll_height / viewport_height).ceil().max(1.0) as u32;
-        let current_page = ((snapshot.scroll.top / viewport_height).floor() as u32 + 1)
-            .clamp(1, total_pages);
+        let current_page =
+            ((snapshot.scroll.top / viewport_height).floor() as u32 + 1).clamp(1, total_pages);
         let target = if next {
             (current_page + 1).min(total_pages)
         } else {
@@ -140,7 +170,12 @@ pub async fn page(session_id: &str, page_num: Option<u32>, next: bool, prev: boo
     Ok(())
 }
 
-pub async fn click(session_id: &str, element_id: u32, page_num: Option<u32>) -> Result<()> {
+pub async fn click(
+    session_id: &str,
+    element_id: u32,
+    page_num: Option<u32>,
+    new_session: bool,
+) -> Result<()> {
     let page = resolve_page(session_id, page_num, actions::GET_PAGE).await?;
     let element_key = format!("e{element_id}");
     let ref_id = page
@@ -148,6 +183,16 @@ pub async fn click(session_id: &str, element_id: u32, page_num: Option<u32>) -> 
         .get(&element_key)
         .cloned()
         .ok_or_else(|| anyhow::anyhow!("element not found on requested page: {element_key}"))?;
+
+    if new_session {
+        let href = link_href_by_element_id(&page.elements, &element_key).ok_or_else(|| {
+            anyhow::anyhow!("element is not a link or does not have an href: {element_key}")
+        })?;
+        let url = resolve_link_url(&page.url, href)?;
+        let (new_session_id, opened_url) = open_session(&url).await?;
+        println!("Session {new_session_id} opened: {opened_url}");
+        return Ok(());
+    }
 
     let click_data = send_ok(Request::new(
         actions::CLICK,
@@ -168,6 +213,26 @@ pub async fn click(session_id: &str, element_id: u32, page_num: Option<u32>) -> 
     let updated = parse_page_from_snapshot(&snapshot, page_num)?;
     println!("{}", crate::cli::output::format_page(&updated, false));
     Ok(())
+}
+
+fn link_href_by_element_id<'a>(elements: &'a [Element], element_id: &str) -> Option<&'a str> {
+    elements.iter().find_map(|element| match element {
+        Element::Link { id, href, .. } if id == element_id => href.as_deref(),
+        _ => None,
+    })
+}
+
+fn resolve_link_url(base_url: &str, href: &str) -> Result<String> {
+    if let Ok(url) = Url::parse(href) {
+        return Ok(url.into());
+    }
+
+    let base = Url::parse(base_url)
+        .map_err(|err| anyhow::anyhow!("failed to parse current page url '{base_url}': {err}"))?;
+    let joined = base.join(href).map_err(|err| {
+        anyhow::anyhow!("failed to resolve link '{href}' against '{base_url}': {err}")
+    })?;
+    Ok(joined.into())
 }
 
 pub async fn type_text(
@@ -208,7 +273,10 @@ pub async fn type_text(
 pub async fn search(session_id: &str, query: &str) -> Result<()> {
     let snapshot = fetch_snapshot(session_id, actions::SEARCH).await?;
     let results = search_snapshot(&snapshot, query);
-    println!("{}", crate::cli::output::format_search_results(&results, false));
+    println!(
+        "{}",
+        crate::cli::output::format_search_results(&results, false)
+    );
     Ok(())
 }
 
@@ -226,7 +294,10 @@ pub async fn wait(session_id: &str, selector: Option<&str>, timeout: Option<u64>
     if let Some(selector) = selector {
         println!("Selector became available: {selector}");
     } else if !resp.is_null() {
-        println!("{}", crate::cli::output::format_response(&Response::success("wait".into(), resp), false));
+        println!(
+            "{}",
+            crate::cli::output::format_response(&Response::success("wait".into(), resp), false)
+        );
     } else {
         println!("Page reached a stable state.");
     }
@@ -274,13 +345,19 @@ pub fn plugin_list() -> Result<()> {
     } else {
         for p in &plugins {
             let desc = p.description.as_deref().unwrap_or("-");
-            println!("{} — {} (trigger: {}, match: {})", p.name, desc, p.trigger, p.match_pattern);
+            println!(
+                "{} — {} (trigger: {}, match: {})",
+                p.name, desc, p.trigger, p.match_pattern
+            );
         }
     }
     Ok(())
 }
 
-async fn fetch_snapshot(session_id: &str, action: &str) -> Result<crate::protocol::messages::RawSnapshot> {
+async fn fetch_snapshot(
+    session_id: &str,
+    action: &str,
+) -> Result<crate::protocol::messages::RawSnapshot> {
     let data = send_ok(Request::new(action, json!({ "session_id": session_id }))).await?;
     parse_snapshot(&data)
 }
@@ -300,8 +377,8 @@ async fn send_ok(req: Request) -> Result<serde_json::Value> {
 
 #[cfg(target_os = "windows")]
 fn write_windows_registry(browser: &str, manifest_path: &Path) -> Result<()> {
-    use winreg::enums::{HKEY_CURRENT_USER, KEY_WRITE};
     use winreg::RegKey;
+    use winreg::enums::{HKEY_CURRENT_USER, KEY_WRITE};
 
     let reg_path = match browser {
         "chrome" => r"Software\Google\Chrome\NativeMessagingHosts\com.browser_cli.relay",
@@ -318,8 +395,8 @@ fn write_windows_registry(browser: &str, manifest_path: &Path) -> Result<()> {
 
 #[cfg(target_os = "windows")]
 fn delete_windows_registry(browser: &str) -> Result<()> {
-    use winreg::enums::HKEY_CURRENT_USER;
     use winreg::RegKey;
+    use winreg::enums::HKEY_CURRENT_USER;
 
     let reg_path = match browser {
         "chrome" => r"Software\Google\Chrome\NativeMessagingHosts\com.browser_cli.relay",
@@ -343,12 +420,12 @@ fn native_host_manifest_path(browser: &str) -> Result<PathBuf> {
     {
         let appdata = std::env::var("APPDATA").map(PathBuf::from)?;
         match browser {
-            "chrome" => Ok(appdata.join(
-                r"Google\Chrome\NativeMessagingHosts\com.browser_cli.relay.json",
-            )),
-            "firefox" => Ok(appdata.join(
-                r"Mozilla\NativeMessagingHosts\com.browser_cli.relay.json",
-            )),
+            "chrome" => {
+                Ok(appdata.join(r"Google\Chrome\NativeMessagingHosts\com.browser_cli.relay.json"))
+            }
+            "firefox" => {
+                Ok(appdata.join(r"Mozilla\NativeMessagingHosts\com.browser_cli.relay.json"))
+            }
             other => bail!("unsupported browser: {other}"),
         }
     }
@@ -356,12 +433,13 @@ fn native_host_manifest_path(browser: &str) -> Result<PathBuf> {
     {
         let home = std::env::var("HOME").map(PathBuf::from)?;
         match browser {
-            "chrome" => Ok(home.join(
-                ".config/google-chrome/NativeMessagingHosts/com.browser_cli.relay.json",
-            )),
-            "firefox" => Ok(home.join(
-                ".mozilla/native-messaging-hosts/com.browser_cli.relay.json",
-            )),
+            "chrome" => {
+                Ok(home
+                    .join(".config/google-chrome/NativeMessagingHosts/com.browser_cli.relay.json"))
+            }
+            "firefox" => {
+                Ok(home.join(".mozilla/native-messaging-hosts/com.browser_cli.relay.json"))
+            }
             other => bail!("unsupported browser: {other}"),
         }
     }
@@ -410,18 +488,23 @@ fn validate_setup_args(browser: &str, extension_id: Option<&str>) -> Result<()> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::page::structure::Element;
 
     #[test]
     fn native_host_manifest_supports_chrome() {
-        let value = build_native_host_manifest("chrome", Path::new("/tmp/browser-cli"), Some("ext"));
+        let value =
+            build_native_host_manifest("chrome", Path::new("/tmp/browser-cli"), Some("ext"));
         assert_eq!(value["name"], NATIVE_HOST_NAME);
         assert_eq!(value["allowed_origins"][0], "chrome-extension://ext/");
     }
 
     #[test]
     fn native_host_manifest_supports_firefox() {
-        let value =
-            build_native_host_manifest("firefox", Path::new("/tmp/browser-cli"), Some("ext@example"));
+        let value = build_native_host_manifest(
+            "firefox",
+            Path::new("/tmp/browser-cli"),
+            Some("ext@example"),
+        );
         assert_eq!(value["allowed_extensions"][0], "ext@example");
     }
 
@@ -429,5 +512,35 @@ mod tests {
     fn chrome_setup_requires_extension_id() {
         let err = validate_setup_args("chrome", None).unwrap_err();
         assert_eq!(err.to_string(), "chrome setup requires --extension-id");
+    }
+
+    #[test]
+    fn resolve_link_url_joins_relative_href() {
+        let url = resolve_link_url("https://example.com/docs/page", "../next").unwrap();
+        assert_eq!(url, "https://example.com/next");
+    }
+
+    #[test]
+    fn link_href_lookup_only_returns_links_with_href() {
+        let elements = vec![
+            Element::Button {
+                id: "e1".into(),
+                text: "Submit".into(),
+            },
+            Element::Link {
+                id: "e2".into(),
+                text: "Docs".into(),
+                href: Some("/docs".into()),
+            },
+            Element::Link {
+                id: "e3".into(),
+                text: "Broken".into(),
+                href: None,
+            },
+        ];
+
+        assert_eq!(link_href_by_element_id(&elements, "e1"), None);
+        assert_eq!(link_href_by_element_id(&elements, "e2"), Some("/docs"));
+        assert_eq!(link_href_by_element_id(&elements, "e3"), None);
     }
 }

@@ -2,6 +2,8 @@
 
 面向命令行和 AI 的浏览器会话操作工具。通过 Chrome/Firefox 扩展 + Native Messaging 协议，将浏览器页面结构化为 XML/JSON 输出，并支持点击、输入等交互操作。
 
+English version: [README.en.md](README.en.md)
+
 **核心优势：**
 - 有状态会话——登录态、Cookie、跳转历史全部保留
 - 结构化 XML 输出——token 消耗低，AI/Agent 直接可读
@@ -103,6 +105,9 @@ browser-cli page s1234567890
 # 点击元素（e1 为页面输出中的元素 ID）
 browser-cli click s1234567890 1
 
+# 如果目标是链接，也可以新开一个会话访问，保持原页面不变
+browser-cli click s1234567890 1 --new-session
+
 # 向输入框输入文本
 browser-cli type s1234567890 3 "hello world"
 
@@ -119,7 +124,7 @@ browser-cli close <session-id>
 browser-cli close --all
 
 browser-cli page <session-id> [-p <页码>] [--next] [--prev] [--fresh] [--json]
-browser-cli click <session-id> <元素ID> [-p <页码>]
+browser-cli click <session-id> <元素ID> [-p <页码>] [--new-session]
 browser-cli type <session-id> <元素ID> <文本> [-p <页码>]
 browser-cli search <session-id> <关键词>
 browser-cli text <session-id> <文本ID> [-p <页码>]
@@ -153,6 +158,7 @@ browser-cli teardown [--browser chrome|firefox]
 - `t1`, `t2`, ... — 被截断的长文本 ID，用 `text` 命令查看完整内容
 - `--next` / `--prev` 按当前滚动位置相对翻页
 - `--fresh` 跳过缓存，强制从浏览器获取最新快照
+- `click --new-session` 仅对带 `href` 的链接生效；CLI 会把链接解析成绝对 URL，并直接创建一个新的 session，原页面保持不变
 
 ### 插件
 
@@ -175,6 +181,7 @@ action = "click"
 - Relay 监听固定端口 `127.0.0.1:12899`，同一时间只运行一个实例
 - 元素 ID（`e1`, `e2`, ...）每次 `page` 后重新编号，操作前需先获取当前页面
 - `page --fresh` 用于动态页面需要绕过缓存的场景
+- `click --new-session` 是显式行为，不会自动套用到普通点击；如果目标元素不是链接，命令会直接报错
 
 ---
 

@@ -200,6 +200,9 @@ Content Script 不向页面注入全局变量，不修改页面原始 DOM 结构
 | `type` | CLI | `{ session_id, ref, text }` | 同上 |
 | `wait` | CLI | `{ session_id, selector?, timeout? }` | 转发给 Content Script，等待页面稳定 |
 
+补充：`click --new-session` 是 CLI 层的显式分支，不会修改协议。CLI 若发现目标元素是带 `href` 的链接，
+会直接把链接解析成绝对 URL 并走 `open` 创建新会话；只有普通 `click` 才会继续转发给浏览器当前 tab。
+
 ### Relay 缓存逻辑
 
 ```
@@ -251,8 +254,8 @@ browser-cli close --all
 browser-cli page <session-id> [-p <page-num>] [--next] [--prev] [--json]
     获取结构化页面内容（XML 或 JSON）；--next/--prev 相对当前滚动位置翻页
 
-browser-cli click <session-id> <element-id> [-p <page-num>]
-    点击元素（element-id 为数字，如 1 对应 e1）
+browser-cli click <session-id> <element-id> [-p <page-num>] [--new-session]
+    点击元素（element-id 为数字，如 1 对应 e1）；若指定 --new-session 且目标为链接，则新开会话访问该 URL，保持原页面不变
 
 browser-cli type <session-id> <element-id> <text> [-p <page-num>]
     向输入框输入文本
@@ -292,8 +295,10 @@ Firefox：`~/.mozilla/native-messaging-hosts/com.browser_cli.relay.json`（`allo
 ### click / type 的元素定位流程
 
 CLI 在发送 `click`/`type` 前，先通过 `get_page` 获取快照并解析出 `element_refs` 映射表
-（`e1 → r3`, `e2 → r7`, ...），然后将对应的 `ref` 传给浏览器。浏览器 Content Script
-用 `elementMap.get(refId)?.deref()` 取出 WeakRef 直接定位元素，无需 CSS 选择器。
+（`e1 → r3`, `e2 → r7`, ...）。
+
+- 普通 `click` / `type`：CLI 将对应的 `ref` 传给浏览器，浏览器 Content Script 用 `elementMap.get(refId)?.deref()` 取出 WeakRef 直接定位元素，无需 CSS 选择器。
+- `click --new-session`：CLI 不把请求发给当前 tab，而是检查目标元素是否为带 `href` 的链接；若是，则按当前页面 URL 解析为绝对地址，再直接调用 `open` 新建一个 session。
 
 ---
 
