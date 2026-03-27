@@ -229,6 +229,20 @@ async function forwardToContent(req: Request): Promise<Response> {
     return { id: req.id, ok: false, error: result.error };
   }
 
+  const navigated = result.data && (result.data as Record<string, unknown>).navigated === true;
+
+  // If navigation occurred, the old content script's snapshot is gone.
+  // Request a fresh snapshot from the new page's content script.
+  if (navigated) {
+    await sendToContent(session.value.tab_id, {
+      type: 'snapshot',
+      params: {
+        session_id: session.value.session_id,
+        request_id: req.id,
+      },
+    });
+  }
+
   const updatedTab = await chrome.tabs.get(session.value.tab_id);
   session.value.url = updatedTab.url ?? session.value.url;
   session.value.title = updatedTab.title ?? session.value.title;
@@ -334,7 +348,29 @@ function raceWithNavigation(
       if (changeInfo.status === 'loading' || changeInfo.url) {
         settled = true;
         chrome.tabs.onUpdated.removeListener(onUpdated);
-        resolve({ ok: true, data: { navigated: true, changed: true, url: changeInfo.url ?? '' } });
+        // Wait for the new page to finish loading, then resolve.
+        // The caller (forwardToContent) will see navigated:true but NO
+        // snapshot from the old page.  The Relay cache is invalidated and
+        // the CLI will get a fresh snapshot on the next get_page.
+        waitForTabLoad(tabId)
+          .then(() => chrome.tabs.get(tabId))
+          .then((tab) => {
+            resolve({
+              ok: true,
+              data: {
+                navigated: true,
+                changed: true,
+                url: tab.url ?? changeInfo.url ?? '',
+                title: tab.title ?? '',
+              },
+            });
+          })
+          .catch(() => {
+            resolve({
+              ok: true,
+              data: { navigated: true, changed: true, url: changeInfo.url ?? '' },
+            });
+          });
       }
     };
 
