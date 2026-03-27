@@ -177,7 +177,7 @@ async fn main() -> anyhow::Result<()> {
                 relay::server::run().await?;
                 return Ok(());
             }
-            return Err(err.into());
+            err.exit();
         }
     };
 
