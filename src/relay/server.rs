@@ -191,13 +191,12 @@ async fn finalize_response(
                 .params
                 .get("session_id")
                 .and_then(|value| value.as_str())
+                && let Some(snapshot) = snapshot_for_session(sessions, session_id).await
             {
-                if let Some(snapshot) = snapshot_for_session(sessions, session_id).await {
-                    return Ok(Response::success(
-                        request.id,
-                        serde_json::to_value(snapshot)?,
-                    ));
-                }
+                return Ok(Response::success(
+                    request.id,
+                    serde_json::to_value(snapshot)?,
+                ));
             }
             Ok(extension_response)
         }

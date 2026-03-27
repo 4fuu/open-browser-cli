@@ -105,8 +105,7 @@ pub fn list_plugins() -> Result<Vec<Plugin>> {
 /// Convert a glob pattern (with `*` matching non-`/` chars) to a regex.
 fn glob_to_regex(pattern: &str) -> Result<Regex> {
     let mut regex = String::from("^");
-    let mut chars = pattern.chars().peekable();
-    while let Some(c) = chars.next() {
+    for c in pattern.chars() {
         match c {
             '*' => regex.push_str("[^/]*"),
             '?' => regex.push_str("[^/]"),

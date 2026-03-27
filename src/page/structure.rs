@@ -84,6 +84,8 @@ pub enum Element {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct SearchMatch {
+    pub page: u32,
+    pub element_id: Option<String>,
     pub ref_id: String,
     pub tag: String,
     pub text: String,
@@ -184,7 +186,7 @@ pub fn parse_page_from_snapshot(
             processed.push(ProcessedNode {
                 order,
                 interactive: true,
-                element: interactive.to_element(id),
+                element: interactive.into_element(id),
                 ref_id: Some(node.ref_id.clone()),
                 full_text: None,
             });
@@ -320,30 +322,165 @@ pub fn search_snapshot(snapshot: &RawSnapshot, query: &str) -> SearchResults {
     }
 
     let needle = query.to_lowercase();
-    let mut seen = HashSet::new();
-    let mut matches = Vec::new();
+    let viewport_height = snapshot.viewport.height.max(1.0);
+    let scroll_height = snapshot.scroll.height.max(viewport_height);
+    let total_pages = (scroll_height / viewport_height).ceil().max(1.0) as u32;
+    let interactive_ids = interactive_ids_by_ref(snapshot, total_pages);
+    let mut seen_refs = HashSet::new();
+    let mut scored_matches = Vec::new();
 
     for node in &snapshot.nodes {
-        let text = normalize_text(&node.text);
-        if text.is_empty() {
+        let page = page_for_rect(&node.rect, viewport_height, total_pages);
+        let fields = searchable_fields(node);
+        let Some(best_match) = fields
+            .iter()
+            .filter_map(|field| {
+                let normalized = normalize_text(field.value);
+                if normalized.is_empty() {
+                    return None;
+                }
+                let lower = normalized.to_lowercase();
+                let idx = lower.find(&needle)?;
+                Some((
+                    field,
+                    normalized,
+                    lower,
+                    idx,
+                    search_rank(node, field.name, idx),
+                ))
+            })
+            .min_by_key(|(_, _, _, _, rank)| rank.clone())
+        else {
+            continue;
+        };
+
+        if !seen_refs.insert(node.ref_id.clone()) {
             continue;
         }
-        let lower = text.to_lowercase();
-        if !lower.contains(&needle) || !seen.insert(text.clone()) {
-            continue;
-        }
-        matches.push(SearchMatch {
-            ref_id: node.ref_id.clone(),
-            tag: node.tag.clone(),
-            context: excerpt_around_match(&text, &lower, &needle),
-            text,
+
+        let (field, normalized, lower, _, rank) = best_match;
+        let context_source = if field.name == "text" {
+            &normalized
+        } else {
+            field.value
+        };
+        let context_lower = if field.name == "text" {
+            lower.as_str()
+        } else {
+            field.lower.as_str()
+        };
+
+        scored_matches.push((
+            rank,
+            SearchMatch {
+                page,
+                element_id: interactive_ids.get(&(page, node.ref_id.clone())).cloned(),
+                ref_id: node.ref_id.clone(),
+                tag: node.tag.clone(),
+                text: normalize_text(&node.text),
+                context: excerpt_around_match(context_source, context_lower, &needle),
+            },
+        ));
+    }
+
+    scored_matches.sort_by(|(left_rank, left_match), (right_rank, right_match)| {
+        left_rank
+            .cmp(right_rank)
+            .then(left_match.page.cmp(&right_match.page))
+            .then(left_match.tag.cmp(&right_match.tag))
+    });
+
+    let matches = scored_matches
+        .into_iter()
+        .map(|(_, item)| item)
+        .take(50)
+        .collect();
+
+    SearchResults { query, matches }
+}
+
+#[derive(Debug, Clone)]
+struct SearchField<'a> {
+    name: &'static str,
+    value: &'a str,
+    lower: String,
+}
+
+fn searchable_fields(node: &RawNode) -> Vec<SearchField<'_>> {
+    let mut fields = Vec::new();
+    let text = normalize_text(&node.text);
+    if !text.is_empty() {
+        fields.push(SearchField {
+            name: "text",
+            lower: text.to_lowercase(),
+            value: &node.text,
         });
-        if matches.len() >= 50 {
-            break;
+    }
+
+    for (name, attr) in [
+        ("aria-label", "aria-label"),
+        ("placeholder", "placeholder"),
+        ("value", "value"),
+        ("name", "name"),
+        ("href", "href"),
+    ] {
+        if let Some(value) = node
+            .attrs
+            .get(attr)
+            .filter(|value| !value.trim().is_empty())
+        {
+            fields.push(SearchField {
+                name,
+                lower: value.to_lowercase(),
+                value,
+            });
         }
     }
 
-    SearchResults { query, matches }
+    fields
+}
+
+fn search_rank(node: &RawNode, field_name: &str, match_index: usize) -> (u8, u8, usize, String) {
+    let interactive_boost = if is_interactive_tag(node.tag.as_str(), &node.attrs) {
+        0
+    } else {
+        1
+    };
+    let field_rank = match field_name {
+        "text" => 0,
+        "aria-label" => 1,
+        "placeholder" => 2,
+        "value" => 3,
+        "name" => 4,
+        "href" => 5,
+        _ => 9,
+    };
+
+    (
+        interactive_boost,
+        field_rank,
+        match_index,
+        node.ref_id.clone(),
+    )
+}
+
+fn interactive_ids_by_ref(
+    snapshot: &RawSnapshot,
+    total_pages: u32,
+) -> HashMap<(u32, String), String> {
+    let mut ids = HashMap::new();
+    for page in 1..=total_pages.max(1) {
+        if let Ok(page_data) = parse_page_from_snapshot(snapshot, Some(page)) {
+            for (element_id, ref_id) in page_data.element_refs {
+                ids.insert((page, ref_id), element_id);
+            }
+        }
+    }
+    ids
+}
+
+fn page_for_rect(rect: &Rect, viewport_height: f64, total_pages: u32) -> u32 {
+    ((rect.y / viewport_height).floor() as u32 + 1).clamp(1, total_pages.max(1))
 }
 
 #[derive(Debug, Clone)]
@@ -384,7 +521,7 @@ enum InteractiveKind {
 }
 
 impl InteractiveKind {
-    fn to_element(self, id: String) -> Element {
+    fn into_element(self, id: String) -> Element {
         match self {
             Self::Link { text, href } => Element::Link { id, text, href },
             Self::Button { text } => Element::Button { id, text },
@@ -398,7 +535,7 @@ impl InteractiveKind {
                 id,
                 input_type,
                 placeholder,
-                value: value.or_else(|| if text.is_empty() { None } else { Some(text) }),
+                value: value.or(if text.is_empty() { None } else { Some(text) }),
                 disabled,
             },
             Self::Checkbox { text, checked } => Element::Checkbox { id, text, checked },
@@ -841,6 +978,50 @@ mod tests {
         )]);
         let result = search_snapshot(&snap, "browser");
         assert_eq!(result.matches.len(), 1);
+        assert_eq!(result.matches[0].page, 1);
+        assert_eq!(result.matches[0].element_id, None);
         assert_eq!(result.matches[0].ref_id, "r1");
+    }
+
+    #[test]
+    fn search_snapshot_returns_element_ids_for_interactive_matches() {
+        let mut button = node("r1", None, "button", "Continue", 10.0);
+        button.attrs.insert("aria-label".into(), "Continue".into());
+        let result = search_snapshot(&snapshot(vec![button]), "continue");
+        assert_eq!(result.matches.len(), 1);
+        assert_eq!(result.matches[0].element_id.as_deref(), Some("e1"));
+        assert_eq!(result.matches[0].page, 1);
+    }
+
+    #[test]
+    fn search_snapshot_matches_placeholder_and_href() {
+        let mut input = node("r1", None, "input", "", 10.0);
+        input
+            .attrs
+            .insert("placeholder".into(), "Search docs".into());
+        input.attrs.insert("type".into(), "text".into());
+        let mut link = node("r2", None, "a", "Docs", 40.0);
+        link.attrs.insert("href".into(), "/docs/api".into());
+
+        let placeholder_result = search_snapshot(&snapshot(vec![input.clone()]), "docs");
+        assert_eq!(placeholder_result.matches.len(), 1);
+        assert_eq!(
+            placeholder_result.matches[0].element_id.as_deref(),
+            Some("e1")
+        );
+
+        let href_result = search_snapshot(&snapshot(vec![link]), "api");
+        assert_eq!(href_result.matches.len(), 1);
+        assert_eq!(href_result.matches[0].element_id.as_deref(), Some("e1"));
+    }
+
+    #[test]
+    fn search_snapshot_prioritizes_interactive_elements() {
+        let text = node("r1", None, "div", "Continue reading", 10.0);
+        let button = node("r2", None, "button", "Continue", 40.0);
+        let result = search_snapshot(&snapshot(vec![text, button]), "continue");
+        assert_eq!(result.matches.len(), 2);
+        assert_eq!(result.matches[0].ref_id, "r2");
+        assert_eq!(result.matches[0].element_id.as_deref(), Some("e1"));
     }
 }

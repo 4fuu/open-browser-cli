@@ -60,6 +60,9 @@ enum Command {
     Open {
         /// URL to open
         url: String,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
     },
     /// Close a browser session
     Close {
@@ -68,9 +71,16 @@ enum Command {
         /// Close all sessions
         #[arg(long, conflicts_with = "session_id")]
         all: bool,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
     },
     /// List open tabs
-    List,
+    List {
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
     /// Get structured page content
     Page {
         /// Session ID
@@ -103,6 +113,18 @@ enum Command {
         /// Open link targets in a new session instead of navigating the current one
         #[arg(long)]
         new_session: bool,
+        /// Bypass cache before resolving the element ID
+        #[arg(long)]
+        fresh: bool,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+        /// Suppress page output and print a compact success result
+        #[arg(long, conflicts_with = "page_after")]
+        quiet: bool,
+        /// Include the updated page after the action
+        #[arg(long)]
+        page_after: bool,
     },
     /// Type text into an input element
     Type {
@@ -115,6 +137,18 @@ enum Command {
         /// Page number used to resolve element IDs
         #[arg(short, long)]
         page: Option<u32>,
+        /// Bypass cache before resolving the element ID
+        #[arg(long)]
+        fresh: bool,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+        /// Suppress page output and print a compact success result
+        #[arg(long, conflicts_with = "page_after")]
+        quiet: bool,
+        /// Include the updated page after the action
+        #[arg(long)]
+        page_after: bool,
     },
     /// Search for text on the page
     Search {
@@ -122,6 +156,12 @@ enum Command {
         session_id: String,
         /// Search query
         query: String,
+        /// Bypass cache and fetch a fresh snapshot from the browser
+        #[arg(long)]
+        fresh: bool,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
     },
     /// Wait for a condition
     Wait {
@@ -133,6 +173,12 @@ enum Command {
         /// Timeout in milliseconds
         #[arg(short, long)]
         timeout: Option<u64>,
+        /// Include the updated page after the wait completes
+        #[arg(long)]
+        page_after: bool,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
     },
     /// Get full text content of the page
     Text {
@@ -143,6 +189,9 @@ enum Command {
         /// Page number used to resolve text IDs
         #[arg(short, long)]
         page: Option<u32>,
+        /// Bypass cache and fetch a fresh snapshot from the browser
+        #[arg(long)]
+        fresh: bool,
         /// Output as JSON
         #[arg(long)]
         json: bool,
@@ -162,9 +211,16 @@ enum PluginCommand {
         name: String,
         /// Session ID
         session_id: String,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
     },
     /// List installed plugins
-    List,
+    List {
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[tokio::main]
@@ -220,12 +276,13 @@ async fn main() -> anyhow::Result<()> {
                 .or_else(|| manifest_path.clone());
             cli::commands::teardown(browser, resolved_path.as_deref())?
         }
-        Command::Open { ref url } => cli::commands::open(url).await?,
+        Command::Open { ref url, json } => cli::commands::open(url, json).await?,
         Command::Close {
             ref session_id,
             all,
-        } => cli::commands::close(session_id.as_deref(), all).await?,
-        Command::List => cli::commands::list().await?,
+            json,
+        } => cli::commands::close(session_id.as_deref(), all, json).await?,
+        Command::List { json } => cli::commands::list(json).await?,
         Command::Page {
             ref session_id,
             page,
@@ -239,33 +296,78 @@ async fn main() -> anyhow::Result<()> {
             id,
             page,
             new_session,
-        } => cli::commands::click(session_id, id, page, new_session).await?,
+            fresh,
+            json,
+            quiet,
+            page_after,
+        } => {
+            cli::commands::click(
+                session_id,
+                id,
+                page,
+                new_session,
+                cli::commands::ActionOptions {
+                    fresh,
+                    json_mode: json,
+                    quiet,
+                    page_after,
+                },
+            )
+            .await?
+        }
         Command::Type {
             ref session_id,
             id,
             ref text,
             page,
-        } => cli::commands::type_text(session_id, id, text, page).await?,
+            fresh,
+            json,
+            quiet,
+            page_after,
+        } => {
+            cli::commands::type_text(
+                session_id,
+                id,
+                text,
+                page,
+                cli::commands::ActionOptions {
+                    fresh,
+                    json_mode: json,
+                    quiet,
+                    page_after,
+                },
+            )
+            .await?
+        }
         Command::Search {
             ref session_id,
             ref query,
-        } => cli::commands::search(session_id, query).await?,
+            fresh,
+            json,
+        } => cli::commands::search(session_id, query, fresh, json).await?,
         Command::Wait {
             ref session_id,
             ref selector,
             timeout,
-        } => cli::commands::wait(session_id, selector.as_deref(), timeout).await?,
+            page_after,
+            json,
+        } => {
+            cli::commands::wait(session_id, selector.as_deref(), timeout, page_after, json).await?
+        }
         Command::Text {
             ref session_id,
             ref text_id,
             page,
+            fresh,
             json,
-        } => cli::commands::text(session_id, text_id, page, json).await?,
+        } => cli::commands::text(session_id, text_id, page, fresh, json).await?,
         Command::Plugin { ref cmd } => match cmd {
-            PluginCommand::Run { name, session_id } => {
-                cli::commands::plugin(name, session_id).await?
-            }
-            PluginCommand::List => cli::commands::plugin_list()?,
+            PluginCommand::Run {
+                name,
+                session_id,
+                json,
+            } => cli::commands::plugin(name, session_id, *json).await?,
+            PluginCommand::List { json } => cli::commands::plugin_list(*json)?,
         },
     }
 

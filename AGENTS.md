@@ -242,38 +242,39 @@ browser-cli setup [--browser chrome|firefox] [--extension-id <id>]
 browser-cli relay
     以 Relay 模式运行（由 Chrome 拉起，用户一般不直接调用）
 
-browser-cli open <url>
-    打开网页，创建会话，返回 session-id
+browser-cli open <url> [--json]
+    打开网页，创建会话；默认输出人类可读结果，`--json` 返回结构化结果
 
-browser-cli list
-    列出所有活跃会话
+browser-cli list [--json]
+    列出所有活跃会话；`--json` 返回结构化会话列表
 
-browser-cli close <session-id>
-browser-cli close --all
+browser-cli close <session-id> [--json]
+browser-cli close --all [--json]
+    关闭会话；`--json` 返回 `{ closed: n }`
 
-browser-cli page <session-id> [-p <page-num>] [--next] [--prev] [--json]
-    获取结构化页面内容（XML 或 JSON）；--next/--prev 相对当前滚动位置翻页
+browser-cli page <session-id> [-p <page-num>] [--next] [--prev] [--fresh] [--json]
+    获取结构化页面内容（XML 或 JSON）；--next/--prev 相对当前滚动位置翻页，`--fresh` 强制绕过 Relay 缓存
 
-browser-cli click <session-id> <element-id> [-p <page-num>] [--new-session]
-    点击元素（element-id 为数字，如 1 对应 e1）；若指定 --new-session 且目标为链接，则新开会话访问该 URL，保持原页面不变
+browser-cli click <session-id> <element-id> [-p <page-num>] [--new-session] [--fresh] [--quiet] [--json] [--page-after]
+    点击元素（element-id 为数字，如 1 对应 e1）；`--fresh` 先强制刷新快照再解析元素，`--quiet` 仅输出成功摘要，`--json` 返回结构化结果，`--page-after` 显式附带更新后的页面；若指定 --new-session 且目标为链接，则新开会话访问该 URL，保持原页面不变
 
-browser-cli type <session-id> <element-id> <text> [-p <page-num>]
-    向输入框输入文本
+browser-cli type <session-id> <element-id> <text> [-p <page-num>] [--fresh] [--quiet] [--json] [--page-after]
+    向输入框输入文本；`--fresh` 先强制刷新快照再解析元素，`--quiet` 仅输出成功摘要，`--json` 返回结构化结果，`--page-after` 显式附带更新后的页面
 
-browser-cli search <session-id> <query>
-    在页面中检索文本
+browser-cli search <session-id> <query> [--fresh] [--json]
+    在页面中检索文本和关键属性；结果包含 page、tag、context，以及命中交互元素时可直接操作的 element_id
 
-browser-cli wait <session-id> [--selector <css>] [--timeout <ms>]
-    等待页面稳定或元素出现
+browser-cli wait <session-id> [--selector <css>] [--timeout <ms>] [--json] [--page-after]
+    等待页面稳定或元素出现；`--json` 返回结构化 wait 结果，`--page-after` 成功后显式附带最新页面
 
-browser-cli text <session-id> <text-id> [-p <page-num>] [--json]
-    查看被截断的完整文本（text-id 为 t1, t2...）
+browser-cli text <session-id> <text-id> [-p <page-num>] [--fresh] [--json]
+    查看被截断的完整文本（text-id 为 t1, t2...）；`--fresh` 强制绕过缓存
 
-browser-cli plugin run <name> <session-id>
-    手动执行指定插件规则
+browser-cli plugin run <name> <session-id> [--json]
+    手动执行指定插件规则；`--json` 返回执行摘要
 
-browser-cli plugin list
-    列出所有已安装插件
+browser-cli plugin list [--json]
+    列出所有已安装插件；`--json` 返回结构化插件列表
 ```
 
 ### setup 命令生成的注册文件
@@ -468,8 +469,16 @@ Relay 和 CLI 无需修改。扩展差异：
 
 ### search 实现
 
-CLI 在 `RawSnapshot` 的所有节点 text 字段上做大小写不敏感字符串匹配，
-返回最多 50 条去重结果，每条含 `ref_id`、`tag`、`text` 和上下文摘要（excerpt）。
+CLI 在 `RawSnapshot` 的节点文本和关键属性（`href`、`placeholder`、`value`、`aria-label`、`name`）上做大小写不敏感匹配，
+按“交互元素优先、文本命中优先、位置靠前优先”排序，返回最多 50 条结果。
+每条结果包含：
+
+- `page`
+- `element_id`（若命中的是当前页可操作的交互元素）
+- `ref_id`
+- `tag`
+- `text`
+- `context`
 
 ---
 
@@ -513,7 +522,7 @@ wait = 500            # 固定等待 ms
 3. 按 `trigger` 判断是否执行
 4. 顺序执行 steps；`wait` 为字符串时，CLI 轮询当前 `RawSnapshot`，在本地结构化页面中做匹配
 5. `click` / `type` 命中目标后，由 CLI 将目标解析成当前页元素 ID / `ref`，再发给浏览器执行
-6. 某步超时则跳过继续，全部完成后返回最终页面状态
+6. 某步超时则跳过继续，全部完成后返回执行摘要；`plugin run --json` 会额外给出结构化统计
 
 ### 查询匹配规则
 
@@ -524,8 +533,8 @@ wait = 500            # 固定等待 ms
 ### 管理命令
 
 ```
-browser-cli plugin run <name> <session-id>   # 手动执行指定规则
-browser-cli plugin list                      # 列出已安装插件
+browser-cli plugin run <name> <session-id> [--json]   # 手动执行指定规则
+browser-cli plugin list [--json]                      # 列出已安装插件
 ```
 
 ---

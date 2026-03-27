@@ -9,6 +9,7 @@ pub fn format_page(page: &PageData, json: bool) -> String {
     }
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn format_response(response: &Response, json_mode: bool) -> String {
     if json_mode {
         return serde_json::to_string_pretty(response).unwrap();
@@ -53,7 +54,21 @@ pub fn format_search_results(results: &SearchResults, json: bool) -> String {
         .matches
         .iter()
         .enumerate()
-        .map(|(idx, item)| format!("{}. [{}] {}", idx + 1, item.tag, item.context))
+        .map(|(idx, item)| {
+            let element = item
+                .element_id
+                .as_deref()
+                .map(|id| format!(" {id}"))
+                .unwrap_or_default();
+            format!(
+                "{}. [page {}] [{}]{} {}",
+                idx + 1,
+                item.page,
+                item.tag,
+                element,
+                item.context
+            )
+        })
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -169,6 +184,8 @@ mod tests {
         let results = SearchResults {
             query: "rust".into(),
             matches: vec![SearchMatch {
+                page: 1,
+                element_id: Some("e2".into()),
                 ref_id: "r1".into(),
                 tag: "div".into(),
                 text: "Rust browser automation".into(),
@@ -177,5 +194,7 @@ mod tests {
         };
         let output = format_search_results(&results, false);
         assert!(output.contains("[div]"));
+        assert!(output.contains("[page 1]"));
+        assert!(output.contains("e2"));
     }
 }

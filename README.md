@@ -99,17 +99,30 @@ browser-cli teardown --browser chrome   # 或 --browser firefox
 browser-cli open https://example.com
 # → Session s1234567890 opened: https://example.com
 
+# 也可以直接拿结构化结果
+browser-cli open https://example.com --json
+
 # 查看页面结构
 browser-cli page s1234567890
 
 # 点击元素（e1 为页面输出中的元素 ID）
 browser-cli click s1234567890 1
 
+# 自动化场景中可只返回成功摘要，或显式附带更新后的页面
+browser-cli click s1234567890 1 --quiet
+browser-cli click s1234567890 1 --json --page-after
+
 # 如果目标是链接，也可以新开一个会话访问，保持原页面不变
 browser-cli click s1234567890 1 --new-session
 
 # 向输入框输入文本
 browser-cli type s1234567890 3 "hello world"
+
+# search 结果会直接给出 page 和可操作的 element_id
+browser-cli search s1234567890 "search" --json
+
+# wait 可返回结构化结果，必要时显式附带等待后的页面
+browser-cli wait s1234567890 --selector "#app" --json --page-after
 
 # 关闭会话
 browser-cli close s1234567890
@@ -118,20 +131,20 @@ browser-cli close s1234567890
 ### 命令速查
 
 ```
-browser-cli open <url>
-browser-cli list
-browser-cli close <session-id>
-browser-cli close --all
+browser-cli open <url> [--json]
+browser-cli list [--json]
+browser-cli close <session-id> [--json]
+browser-cli close --all [--json]
 
 browser-cli page <session-id> [-p <页码>] [--next] [--prev] [--fresh] [--json]
-browser-cli click <session-id> <元素ID> [-p <页码>] [--new-session]
-browser-cli type <session-id> <元素ID> <文本> [-p <页码>]
-browser-cli search <session-id> <关键词>
-browser-cli text <session-id> <文本ID> [-p <页码>]
-browser-cli wait <session-id> [--selector <CSS选择器>] [--timeout <毫秒>]
+browser-cli click <session-id> <元素ID> [-p <页码>] [--new-session] [--fresh] [--quiet] [--json] [--page-after]
+browser-cli type <session-id> <元素ID> <文本> [-p <页码>] [--fresh] [--quiet] [--json] [--page-after]
+browser-cli search <session-id> <关键词> [--fresh] [--json]
+browser-cli text <session-id> <文本ID> [-p <页码>] [--fresh] [--json]
+browser-cli wait <session-id> [--selector <CSS选择器>] [--timeout <毫秒>] [--json] [--page-after]
 
-browser-cli plugin list
-browser-cli plugin run <名称> <session-id>
+browser-cli plugin list [--json]
+browser-cli plugin run <名称> <session-id> [--json]
 
 browser-cli setup [--browser chrome|firefox] [--extension-id <ID>]
 browser-cli teardown [--browser chrome|firefox]
@@ -158,6 +171,9 @@ browser-cli teardown [--browser chrome|firefox]
 - `t1`, `t2`, ... — 被截断的长文本 ID，用 `text` 命令查看完整内容
 - `--next` / `--prev` 按当前滚动位置相对翻页
 - `--fresh` 跳过缓存，强制从浏览器获取最新快照
+- `open` / `close` / `list` / `search` / `wait` / `plugin` 全部支持 `--json`
+- `click` / `type` 默认仍输出整页 XML；可用 `--quiet` 只看成功结果，用 `--json` 获取结构化摘要，用 `--page-after` 在结构化返回中显式附带最新页面
+- `search` 会返回 `page`、`tag`、上下文摘要，以及命中交互元素时的 `element_id`
 - `click --new-session` 仅对带 `href` 的链接生效；CLI 会把链接解析成绝对 URL，并直接创建一个新的 session，原页面保持不变
 
 ### 插件
@@ -176,11 +192,15 @@ timeout = 3000
 action = "click"
 ```
 
+- `browser-cli plugin list --json` 返回结构化插件列表
+- `browser-cli plugin run <名称> <session-id> --json` 返回执行摘要（总步数、完成/跳过/失败数量、页面是否更新）
+
 ### 注意事项
 
 - Relay 监听固定端口 `127.0.0.1:12899`，同一时间只运行一个实例
 - 元素 ID（`e1`, `e2`, ...）每次 `page` 后重新编号，操作前需先获取当前页面
-- `page --fresh` 用于动态页面需要绕过缓存的场景
+- `page --fresh`、`search --fresh`、`text --fresh`，以及 `click` / `type` 的 `--fresh`，都用于动态页面需要绕过缓存的场景
+- `wait --page-after` 会在等待成功后再抓一次新页面，适合继续链式操作
 - `click --new-session` 是显式行为，不会自动套用到普通点击；如果目标元素不是链接，命令会直接报错
 
 ---
