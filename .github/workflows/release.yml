@@ -78,9 +78,102 @@ jobs:
           name: ${{ matrix.target }}
           path: ${{ env.ASSET }}
 
+  extension:
+    name: Build browser extension packages
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: extension/package-lock.json
+
+      - name: Sync extension versions
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          VER="${VERSION#v}"
+          echo "CHROME_EXTENSION_ASSET=browser-cli-extension-chrome-${VER}.zip" >> $GITHUB_ENV
+          echo "FIREFOX_EXTENSION_ASSET=browser-cli-extension-firefox-${VER}.xpi" >> $GITHUB_ENV
+          node - <<'NODE'
+          const fs = require('fs');
+          const version = process.env.VERSION.replace(/^v/, '');
+
+          const writeJson = (path, update) => {
+            const data = JSON.parse(fs.readFileSync(path, 'utf8'));
+            update(data);
+            fs.writeFileSync(path, JSON.stringify(data, null, 2) + '\n');
+          };
+
+          writeJson('extension/manifest.json', (data) => {
+            data.version = version;
+          });
+          writeJson('extension/package.json', (data) => {
+            data.version = version;
+          });
+          writeJson('extension/package-lock.json', (data) => {
+            data.version = version;
+            if (data.packages && data.packages['']) {
+              data.packages[''].version = version;
+            }
+          });
+          NODE
+
+      - name: Install extension dependencies
+        run: npm ci
+        working-directory: extension
+
+      - name: Build Chrome extension zip
+        continue-on-error: true
+        run: |
+          cd extension
+          npm run pack
+          cp "dist/browser-cli-extension.zip" "../${CHROME_EXTENSION_ASSET}"
+
+      - name: Build signed Firefox extension
+        continue-on-error: true
+        env:
+          WEB_EXT_API_KEY: ${{ secrets.WEB_EXT_API_KEY }}
+          WEB_EXT_API_SECRET: ${{ secrets.WEB_EXT_API_SECRET }}
+        run: |
+          if [ -z "${WEB_EXT_API_KEY:-}" ]; then
+            echo "::error::Missing GitHub Actions secret WEB_EXT_API_KEY"
+            exit 1
+          fi
+          if [ -z "${WEB_EXT_API_SECRET:-}" ]; then
+            echo "::error::Missing GitHub Actions secret WEB_EXT_API_SECRET"
+            exit 1
+          fi
+          cd extension
+          npx web-ext sign \
+            --channel=unlisted \
+            --no-input \
+            --source-dir . \
+            --artifacts-dir dist/firefox-signed \
+            --api-key "$WEB_EXT_API_KEY" \
+            --api-secret "$WEB_EXT_API_SECRET"
+          SIGNED_XPI="$(find dist/firefox-signed -maxdepth 1 -type f -name '*.xpi' | head -n 1)"
+          if [ -z "$SIGNED_XPI" ]; then
+            echo "::error::web-ext did not produce a signed .xpi"
+            exit 1
+          fi
+          cp "$SIGNED_XPI" "../${FIREFOX_EXTENSION_ASSET}"
+
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: browser-extension-packages
+          path: |
+            browser-cli-extension-chrome-*.zip
+            browser-cli-extension-firefox-*.xpi
+          if-no-files-found: warn
+
   release:
     name: Create Release & Update Manifests
-    needs: build
+    needs: [build, extension]
+    if: ${{ always() && needs.build.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
