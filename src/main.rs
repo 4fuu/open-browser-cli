@@ -19,6 +19,7 @@ struct Cli {
 enum BrowserKind {
     Chrome,
     Firefox,
+    UngoogledChromium,
 }
 
 #[derive(Subcommand)]
@@ -159,6 +160,7 @@ async fn main() -> anyhow::Result<()> {
             let browser = match browser {
                 BrowserKind::Chrome => "chrome",
                 BrowserKind::Firefox => "firefox",
+                BrowserKind::UngoogledChromium => "ungoogled-chromium",
             };
             cli::commands::setup(browser, extension_id.as_deref(), manifest_path.as_deref())?
         }
