@@ -39,27 +39,36 @@ npm run pack         # 编译并打包，产物：extension/dist/browser-cli-ext
 
 ### 1. 加载扩展
 
-**开发模式（未打包）：**
+**Chrome：**
 
-在 Chrome 打开 `chrome://extensions`，开启「开发者模式」，点击「加载已解压的扩展程序」，选择 `extension/` 目录。
-
-**打包模式：**
-
-运行 `npm run pack` 同时生成：
-- `extension/dist/browser-cli-extension.zip` — Chrome 扩展包
+在 Chrome 打开 `chrome://extensions`，开启「开发者模式」，点击「加载已解压的扩展程序」，选择 `extension/` 目录（开发模式）；或从 [Releases](../../releases) 下载 `.zip` 后以同样方式加载。
 
 记录扩展 ID（形如 `abcdefghijklmnopabcdefghijklmnop`）。
 
+**Firefox：**
+
+从 [Releases](../../releases) 下载 `.xpi` 文件，在 Firefox 打开 `about:addons`，点击齿轮图标 → 「从文件安装附加组件」，选择 `.xpi` 文件完成安装。
+
+记录扩展 ID（可在 `about:addons` 中扩展详情页查看，形如 `browser-cli@browser-cli`）。
+
 ### 2. 注册 Native Messaging Host
+
+**Chrome：**
 
 ```bash
 browser-cli setup --extension-id <扩展ID>
 ```
 
-注册文件写入后，**重启浏览器** 使配置生效。如需卸载，执行对应的 `teardown` 命令：
+**Firefox：**
 
 ```bash
-browser-cli teardown --browser chrome
+browser-cli setup --browser firefox --extension-id <扩展ID>
+```
+
+注册文件写入后，**重启浏览器** 使配置生效。如需卸载：
+
+```bash
+browser-cli teardown --browser chrome   # 或 --browser firefox
 ```
 
 ## 使用
