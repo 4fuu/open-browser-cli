@@ -491,6 +491,7 @@ fn searchable_fields(node: &RawNode) -> Vec<SearchField<'_>> {
 
     for (name, attr) in [
         ("aria-label", "aria-label"),
+        ("title", "title"),
         ("placeholder", "placeholder"),
         ("value", "value"),
         ("name", "name"),
@@ -1030,6 +1031,7 @@ fn element_label(node: &RawNode) -> String {
     }
     node.attrs
         .get("aria-label")
+        .or_else(|| node.attrs.get("title"))
         .or_else(|| node.attrs.get("placeholder"))
         .cloned()
         .unwrap_or_default()
@@ -1072,6 +1074,9 @@ fn collect_list_items<'a>(
     };
     for child in children {
         if child.tag == "li" {
+            if li_is_interactive_only(child, children_by_parent) {
+                continue;
+            }
             let text = normalize_text(&child.text);
             if !text.is_empty() {
                 items.push(text);
@@ -1081,6 +1086,49 @@ fn collect_list_items<'a>(
         }
     }
     items
+}
+
+fn li_is_interactive_only<'a>(
+    li: &'a RawNode,
+    children_by_parent: &HashMap<&'a str, Vec<&'a RawNode>>,
+) -> bool {
+    if is_interactive_tag(li.tag.as_str(), &li.attrs) {
+        return true;
+    }
+
+    let li_text = normalize_text(&li.text);
+    if li_text.is_empty() {
+        return false;
+    }
+
+    let mut labels = Vec::new();
+    collect_interactive_root_labels(&li.ref_id, children_by_parent, &mut labels);
+
+    if labels.is_empty() {
+        return false;
+    }
+
+    normalize_text(&labels.join(" ")) == li_text
+}
+
+fn collect_interactive_root_labels<'a>(
+    parent_ref: &str,
+    children_by_parent: &HashMap<&'a str, Vec<&'a RawNode>>,
+    out: &mut Vec<String>,
+) {
+    let Some(children) = children_by_parent.get(parent_ref) else {
+        return;
+    };
+    for child in children {
+        if is_interactive_tag(child.tag.as_str(), &child.attrs) {
+            let label = element_label(child);
+            if !label.is_empty() {
+                out.push(label);
+            }
+            continue;
+        }
+        collect_interactive_root_labels(&child.ref_id, children_by_parent, out);
+    }
 }
 
 fn collect_table_rows<'a>(
@@ -1464,5 +1512,91 @@ mod tests {
         assert_eq!(result.matches.len(), 2);
         assert_eq!(result.matches[0].ref_id, "r2");
         assert_eq!(result.matches[0].element_id.as_deref(), Some("e1"));
+    }
+
+    #[test]
+    fn list_with_only_links_emits_links_not_list() {
+        let ul = node("r1", None, "ul", "", 10.0);
+        let li1 = node("r2", Some("r1"), "li", "Code", 10.0);
+        let mut a1 = node("r3", Some("r2"), "a", "Code", 10.0);
+        a1.attrs.insert("href".into(), "/code".into());
+        let li2 = node("r4", Some("r1"), "li", "Issues", 30.0);
+        let mut a2 = node("r5", Some("r4"), "a", "Issues", 30.0);
+        a2.attrs.insert("href".into(), "/issues".into());
+
+        let page =
+            parse_page_from_snapshot(&snapshot(vec![ul, li1, a1, li2, a2]), Some(1)).unwrap();
+
+        assert!(
+            !page.elements.iter().any(|e| matches!(e, Element::List { .. })),
+            "should not emit a list element"
+        );
+
+        let links: Vec<_> = page
+            .elements
+            .iter()
+            .filter(|e| matches!(e, Element::Link { .. }))
+            .collect();
+        assert_eq!(links.len(), 2);
+        match &links[0] {
+            Element::Link { text, href, .. } => {
+                assert_eq!(text, "Code");
+                assert_eq!(href.as_deref(), Some("/code"));
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn plain_text_list_stays_as_list() {
+        let ul = node("r1", None, "ul", "", 10.0);
+        let li1 = node("r2", Some("r1"), "li", "Alpha", 10.0);
+        let li2 = node("r3", Some("r1"), "li", "Beta", 30.0);
+
+        let page = parse_page_from_snapshot(&snapshot(vec![ul, li1, li2]), Some(1)).unwrap();
+
+        match &page.elements[0] {
+            Element::List { items, .. } => {
+                assert_eq!(items, &["Alpha", "Beta"]);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn mixed_list_keeps_text_items_and_emits_links() {
+        let ul = node("r1", None, "ul", "", 10.0);
+        let li1 = node("r2", Some("r1"), "li", "Alpha", 10.0);
+        let li2 = node("r3", Some("r1"), "li", "Code", 30.0);
+        let mut a = node("r4", Some("r3"), "a", "Code", 30.0);
+        a.attrs.insert("href".into(), "/code".into());
+
+        let page =
+            parse_page_from_snapshot(&snapshot(vec![ul, li1, li2, a]), Some(1)).unwrap();
+
+        let list_items: Vec<_> = page
+            .elements
+            .iter()
+            .filter_map(|e| match e {
+                Element::List { items, .. } => Some(items.clone()),
+                _ => None,
+            })
+            .flatten()
+            .collect();
+        assert_eq!(list_items, vec!["Alpha"]);
+
+        assert!(page.elements.iter().any(|e| matches!(e, Element::Link { .. })));
+    }
+
+    #[test]
+    fn button_uses_title_as_fallback_label() {
+        let mut btn = node("r1", None, "button", "", 10.0);
+        btn.attrs.insert("title".into(), "Close".into());
+        let page = parse_page_from_snapshot(&snapshot(vec![btn]), Some(1)).unwrap();
+
+        match &page.elements[0] {
+            Element::Button { text, .. } => assert_eq!(text, "Close"),
+            other => panic!("unexpected: {other:?}"),
+        }
     }
 }

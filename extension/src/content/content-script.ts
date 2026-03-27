@@ -390,6 +390,7 @@ function extractAttrs(element: Element): Record<string, string> {
   maybeSet('name', element.getAttribute('name'));
   maybeSet('role', element.getAttribute('role'));
   maybeSet('aria-label', element.getAttribute('aria-label'));
+  maybeSet('title', element.getAttribute('title'));
   if (element.hasAttribute('onclick')) {
     attrs.onclick = 'true';
   }
