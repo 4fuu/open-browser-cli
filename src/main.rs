@@ -38,6 +38,15 @@ enum Command {
         #[arg(long)]
         manifest_path: Option<PathBuf>,
     },
+    /// Remove the Native Messaging host manifest (and registry key on Windows)
+    Teardown {
+        /// Target browser to remove
+        #[arg(long, value_enum, default_value_t = BrowserKind::Chrome)]
+        browser: BrowserKind,
+        /// Override the manifest file path instead of using the default location.
+        #[arg(long)]
+        manifest_path: Option<PathBuf>,
+    },
     /// Open a URL in the browser
     Open {
         /// URL to open
@@ -163,6 +172,17 @@ async fn main() -> anyhow::Result<()> {
                 BrowserKind::UngoogledChromium => "ungoogled-chromium",
             };
             cli::commands::setup(browser, extension_id.as_deref(), manifest_path.as_deref())?
+        }
+        Command::Teardown {
+            browser,
+            ref manifest_path,
+        } => {
+            let browser = match browser {
+                BrowserKind::Chrome => "chrome",
+                BrowserKind::Firefox => "firefox",
+                BrowserKind::UngoogledChromium => "ungoogled-chromium",
+            };
+            cli::commands::teardown(browser, manifest_path.as_deref())?
         }
         Command::Open { ref url } => cli::commands::open(url).await?,
         Command::Close {

@@ -55,6 +55,25 @@ pub fn setup(browser: &str, extension_id: Option<&str>, manifest_path: Option<&P
     Ok(())
 }
 
+pub fn teardown(browser: &str, manifest_path: Option<&Path>) -> Result<()> {
+    let manifest_path = match manifest_path {
+        Some(p) => p.to_path_buf(),
+        None => native_host_manifest_path(browser)?,
+    };
+
+    if manifest_path.exists() {
+        fs::remove_file(&manifest_path)?;
+        println!("Removed native host manifest: {}", manifest_path.display());
+    } else {
+        println!("Manifest not found, skipping: {}", manifest_path.display());
+    }
+
+    #[cfg(target_os = "windows")]
+    delete_windows_registry(browser)?;
+
+    Ok(())
+}
+
 pub async fn close(session_id: Option<&str>, close_all: bool) -> Result<()> {
     let params = if close_all {
         json!({ "all": true })
@@ -263,6 +282,29 @@ fn write_windows_registry(browser: &str, manifest_path: &Path) -> Result<()> {
     let (key, _) = hkcu.create_subkey_with_flags(reg_path, KEY_WRITE)?;
     key.set_value("", &manifest_path.to_string_lossy().as_ref())?;
     println!("Wrote registry key: HKCU\\{reg_path}");
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn delete_windows_registry(browser: &str) -> Result<()> {
+    use winreg::enums::HKEY_CURRENT_USER;
+    use winreg::RegKey;
+
+    let reg_path = match browser {
+        "chrome" => r"Software\Google\Chrome\NativeMessagingHosts\com.browser_cli.relay",
+        "firefox" => r"Software\Mozilla\NativeMessagingHosts\com.browser_cli.relay",
+        "ungoogled-chromium" => r"Software\Chromium\NativeMessagingHosts\com.browser_cli.relay",
+        _ => return Ok(()),
+    };
+
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    match hkcu.delete_subkey(reg_path) {
+        Ok(()) => println!("Removed registry key: HKCU\\{reg_path}"),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            println!("Registry key not found, skipping: HKCU\\{reg_path}");
+        }
+        Err(e) => return Err(e.into()),
+    }
     Ok(())
 }
 
