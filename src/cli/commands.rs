@@ -149,13 +149,22 @@ pub async fn click(session_id: &str, element_id: u32, page_num: Option<u32>) -> 
         .cloned()
         .ok_or_else(|| anyhow::anyhow!("element not found on requested page: {element_key}"))?;
 
-    send_ok(Request::new(
+    let click_data = send_ok(Request::new(
         actions::CLICK,
         json!({ "session_id": session_id, "ref": ref_id }),
     ))
     .await?;
 
-    let snapshot = fetch_snapshot(session_id, actions::GET_PAGE_FRESH).await?;
+    let navigated = click_data
+        .get("navigated")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let action = if navigated {
+        actions::GET_PAGE_FRESH
+    } else {
+        actions::GET_PAGE
+    };
+    let snapshot = fetch_snapshot(session_id, action).await?;
     let updated = parse_page_from_snapshot(&snapshot, page_num)?;
     println!("{}", crate::cli::output::format_page(&updated, false));
     Ok(())
@@ -175,13 +184,22 @@ pub async fn type_text(
         .cloned()
         .ok_or_else(|| anyhow::anyhow!("element not found on requested page: {element_key}"))?;
 
-    send_ok(Request::new(
+    let type_data = send_ok(Request::new(
         actions::TYPE,
         json!({ "session_id": session_id, "ref": ref_id, "text": text }),
     ))
     .await?;
 
-    let snapshot = fetch_snapshot(session_id, actions::GET_PAGE_FRESH).await?;
+    let navigated = type_data
+        .get("navigated")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let action = if navigated {
+        actions::GET_PAGE_FRESH
+    } else {
+        actions::GET_PAGE
+    };
+    let snapshot = fetch_snapshot(session_id, action).await?;
     let updated = parse_page_from_snapshot(&snapshot, page_num)?;
     println!("{}", crate::cli::output::format_page(&updated, false));
     Ok(())

@@ -182,6 +182,8 @@ async function handleSnapshotRequest(req: Request): Promise<Response> {
     return { id: req.id, ok: false, error: session.error };
   }
 
+  await ensureTabLoaded(session.value.tab_id);
+
   const result = await sendToContent(session.value.tab_id, {
     type: 'snapshot',
     params: {
@@ -220,7 +222,9 @@ async function forwardToContent(req: Request): Promise<Response> {
     },
   };
 
-  const result = await sendToContent(session.value.tab_id, contentReq);
+  const result = await raceWithNavigation(session.value.tab_id, () =>
+    sendToContent(session.value.tab_id, contentReq),
+  );
   if (!result.ok) {
     return { id: req.id, ok: false, error: result.error };
   }
@@ -283,6 +287,72 @@ function waitForTabLoad(tabId: number): Promise<void> {
     };
 
     chrome.tabs.onUpdated.addListener(listener);
+  });
+}
+
+// Waits for tab to reach 'complete' status, checking current state first to
+// avoid missing the event if the tab is already loaded.
+function ensureTabLoaded(tabId: number): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      chrome.tabs.onUpdated.removeListener(listener);
+      reject(new Error('Tab load timeout'));
+    }, 30_000);
+
+    const listener = (updatedTabId: number, changeInfo: chrome.tabs.OnUpdatedInfo) => {
+      if (updatedTabId === tabId && changeInfo.status === 'complete') {
+        clearTimeout(timeout);
+        chrome.tabs.onUpdated.removeListener(listener);
+        resolve();
+      }
+    };
+
+    chrome.tabs.onUpdated.addListener(listener);
+
+    chrome.tabs.get(tabId).then((tab) => {
+      if (tab.status === 'complete') {
+        clearTimeout(timeout);
+        chrome.tabs.onUpdated.removeListener(listener);
+        resolve();
+      }
+    });
+  });
+}
+
+// Races a content script call against tab navigation. If the tab starts loading
+// a new URL before the content script responds (e.g. bfcache freeze), resolves
+// immediately with navigated:true instead of hanging indefinitely.
+function raceWithNavigation(
+  tabId: number,
+  fn: () => Promise<ContentResponse>,
+): Promise<ContentResponse> {
+  return new Promise((resolve) => {
+    let settled = false;
+
+    const onUpdated = (updatedTabId: number, changeInfo: chrome.tabs.TabChangeInfo) => {
+      if (updatedTabId !== tabId || settled) return;
+      if (changeInfo.status === 'loading' || changeInfo.url) {
+        settled = true;
+        chrome.tabs.onUpdated.removeListener(onUpdated);
+        resolve({ ok: true, data: { navigated: true, changed: true, url: changeInfo.url ?? '' } });
+      }
+    };
+
+    chrome.tabs.onUpdated.addListener(onUpdated);
+
+    fn().then((result) => {
+      if (!settled) {
+        settled = true;
+        chrome.tabs.onUpdated.removeListener(onUpdated);
+        resolve(result);
+      }
+    }).catch((err: unknown) => {
+      if (!settled) {
+        settled = true;
+        chrome.tabs.onUpdated.removeListener(onUpdated);
+        resolve({ ok: false, error: err instanceof Error ? err.message : String(err) });
+      }
+    });
   });
 }
 
