@@ -27,10 +27,23 @@ pub struct PageData {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Element {
-    Text { id: Option<String>, text: String },
-    Heading { level: u8, text: String },
-    Link { id: String, text: String, href: Option<String> },
-    Button { id: String, text: String },
+    Text {
+        id: Option<String>,
+        text: String,
+    },
+    Heading {
+        level: u8,
+        text: String,
+    },
+    Link {
+        id: String,
+        text: String,
+        href: Option<String>,
+    },
+    Button {
+        id: String,
+        text: String,
+    },
     Input {
         id: String,
         input_type: String,
@@ -38,7 +51,11 @@ pub enum Element {
         value: Option<String>,
         disabled: bool,
     },
-    Checkbox { id: String, text: String, checked: bool },
+    Checkbox {
+        id: String,
+        text: String,
+        checked: bool,
+    },
     Radio {
         id: String,
         text: String,
@@ -331,8 +348,13 @@ pub fn search_snapshot(snapshot: &RawSnapshot, query: &str) -> SearchResults {
 
 #[derive(Debug, Clone)]
 enum InteractiveKind {
-    Link { text: String, href: Option<String> },
-    Button { text: String },
+    Link {
+        text: String,
+        href: Option<String>,
+    },
+    Button {
+        text: String,
+    },
     Input {
         text: String,
         input_type: String,
@@ -340,7 +362,10 @@ enum InteractiveKind {
         value: Option<String>,
         disabled: bool,
     },
-    Checkbox { text: String, checked: bool },
+    Checkbox {
+        text: String,
+        checked: bool,
+    },
     Radio {
         text: String,
         name: Option<String>,
@@ -554,9 +579,7 @@ fn flush_pending_text(
     } else {
         None
     };
-    let full_text_pair = text_id
-        .clone()
-        .map(|id| (id, full_text.clone()));
+    let full_text_pair = text_id.clone().map(|id| (id, full_text.clone()));
 
     processed.push(ProcessedNode {
         order: pending.order,
@@ -604,7 +627,10 @@ fn extract_element_id(element: &Element) -> String {
         | Element::Radio { id, .. }
         | Element::Select { id, .. }
         | Element::Textarea { id, .. } => id.clone(),
-        Element::Text { .. } | Element::Heading { .. } | Element::List { .. } | Element::Table { .. } => String::new(),
+        Element::Text { .. }
+        | Element::Heading { .. }
+        | Element::List { .. }
+        | Element::Table { .. } => String::new(),
     }
 }
 
@@ -640,7 +666,10 @@ fn intersects_page(rect: &Rect, page_top: f64, page_bottom: f64) -> bool {
 }
 
 fn is_trueish(value: Option<&String>) -> bool {
-    matches!(value.map(String::as_str), Some("true" | "checked" | "disabled" | "selected" | "1" | ""))
+    matches!(
+        value.map(String::as_str),
+        Some("true" | "checked" | "disabled" | "selected" | "1" | "")
+    )
 }
 
 fn collect_list_items<'a>(
@@ -803,7 +832,13 @@ mod tests {
 
     #[test]
     fn search_snapshot_finds_matches() {
-        let snap = snapshot(vec![node("r1", None, "div", "Rust browser automation", 10.0)]);
+        let snap = snapshot(vec![node(
+            "r1",
+            None,
+            "div",
+            "Rust browser automation",
+            10.0,
+        )]);
         let result = search_snapshot(&snap, "browser");
         assert_eq!(result.matches.len(), 1);
         assert_eq!(result.matches[0].ref_id, "r1");

@@ -32,7 +32,10 @@ pub async fn run_plugin(plugin: &Plugin, session_id: &str) -> Result<()> {
     );
 
     for (i, step) in plugin.steps.iter().enumerate() {
-        eprintln!("plugin: step {i}: action='{}' wait={:?}", step.action, step.wait);
+        eprintln!(
+            "plugin: step {i}: action='{}' wait={:?}",
+            step.action, step.wait
+        );
 
         match step.action.as_str() {
             "wait" => {
@@ -142,11 +145,7 @@ async fn prepare_interactive_target(
     Ok(Some(target))
 }
 
-async fn wait_for_query(
-    session_id: &str,
-    query: &str,
-    timeout_ms: u64,
-) -> Result<Option<()>> {
+async fn wait_for_query(session_id: &str, query: &str, timeout_ms: u64) -> Result<Option<()>> {
     let deadline = Instant::now() + Duration::from_millis(timeout_ms);
 
     loop {
@@ -247,7 +246,10 @@ fn interactive_element_id(element: &Element) -> Option<String> {
         | Element::Radio { id, .. }
         | Element::Select { id, .. }
         | Element::Textarea { id, .. } => Some(id.clone()),
-        Element::Text { .. } | Element::Heading { .. } | Element::List { .. } | Element::Table { .. } => None,
+        Element::Text { .. }
+        | Element::Heading { .. }
+        | Element::List { .. }
+        | Element::Table { .. } => None,
     }
 }
 
@@ -273,7 +275,10 @@ fn interactive_candidate_text(element: &Element) -> String {
         Element::Textarea {
             text, placeholder, ..
         } => join_parts([Some(text.as_str()), placeholder.as_deref()]),
-        Element::Text { .. } | Element::Heading { .. } | Element::List { .. } | Element::Table { .. } => String::new(),
+        Element::Text { .. }
+        | Element::Heading { .. }
+        | Element::List { .. }
+        | Element::Table { .. } => String::new(),
     }
 }
 
@@ -298,7 +303,12 @@ fn element_text(element: &Element) -> String {
             value.as_deref(),
         ]),
         Element::List { items } => items.join(" "),
-        Element::Table { rows } => rows.iter().flat_map(|r| r.iter()).cloned().collect::<Vec<_>>().join(" "),
+        Element::Table { rows } => rows
+            .iter()
+            .flat_map(|r| r.iter())
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(" "),
     }
 }
 

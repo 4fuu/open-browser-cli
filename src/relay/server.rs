@@ -239,7 +239,10 @@ async fn handle_page_chunk(msg: serde_json::Value, sessions: &SessionMap) -> Res
 
     if chunk.chunk_index == 0 || chunk.meta.is_some() || cache.snapshot.is_none() {
         let Some(meta) = chunk.meta.clone() else {
-            anyhow::bail!("first page chunk for session {} is missing meta", chunk.session_id);
+            anyhow::bail!(
+                "first page chunk for session {} is missing meta",
+                chunk.session_id
+            );
         };
         cache.snapshot = Some(RawSnapshot::from_meta(meta));
         cache.complete = false;
@@ -248,9 +251,7 @@ async fn handle_page_chunk(msg: serde_json::Value, sessions: &SessionMap) -> Res
         // Stale chunk from a superseded operation — discard to prevent cross-operation data mixing.
         eprintln!(
             "relay: discarding stale chunk (session={}, expected={:?}, got={})",
-            chunk.session_id,
-            cache.active_request_id,
-            chunk.request_id,
+            chunk.session_id, cache.active_request_id, chunk.request_id,
         );
         return Ok(());
     }
@@ -377,8 +378,14 @@ mod tests {
                     Some(SnapshotMeta {
                         url: "https://example.com".into(),
                         title: "Example".into(),
-                        viewport: Viewport { width: 1000.0, height: 800.0 },
-                        scroll: ScrollState { top: 0.0, height: 1600.0 },
+                        viewport: Viewport {
+                            width: 1000.0,
+                            height: 800.0,
+                        },
+                        scroll: ScrollState {
+                            top: 0.0,
+                            height: 1600.0,
+                        },
                     })
                 } else {
                     None
@@ -389,7 +396,12 @@ mod tests {
                     tag: "p".into(),
                     text: req_id.to_string(),
                     attrs: HashMap::new(),
-                    rect: Rect { x: 0.0, y: 0.0, w: 10.0, h: 10.0 },
+                    rect: Rect {
+                        x: 0.0,
+                        y: 0.0,
+                        w: 10.0,
+                        h: 10.0,
+                    },
                 }],
                 chunk_index,
                 done,
@@ -398,13 +410,21 @@ mod tests {
         };
 
         // op1 chunk_0 starts a snapshot
-        handle_page_chunk(make_chunk("op1", 0, false, true), &sessions).await.unwrap();
+        handle_page_chunk(make_chunk("op1", 0, false, true), &sessions)
+            .await
+            .unwrap();
         // op2 chunk_0 supersedes op1 — resets the cache
-        handle_page_chunk(make_chunk("op2", 0, false, true), &sessions).await.unwrap();
+        handle_page_chunk(make_chunk("op2", 0, false, true), &sessions)
+            .await
+            .unwrap();
         // op1 chunk_1 arrives late — should be discarded
-        handle_page_chunk(make_chunk("op1", 1, true, false), &sessions).await.unwrap();
+        handle_page_chunk(make_chunk("op1", 1, true, false), &sessions)
+            .await
+            .unwrap();
         // op2 chunk_1 arrives — should be appended
-        handle_page_chunk(make_chunk("op2", 1, true, false), &sessions).await.unwrap();
+        handle_page_chunk(make_chunk("op2", 1, true, false), &sessions)
+            .await
+            .unwrap();
 
         let snapshot = snapshot_for_session(&sessions, "s1").await.unwrap();
         // Only op2's two nodes should be present; op1's stale chunk must be absent.
