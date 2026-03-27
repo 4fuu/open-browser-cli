@@ -329,7 +329,7 @@ function raceWithNavigation(
   return new Promise((resolve) => {
     let settled = false;
 
-    const onUpdated = (updatedTabId: number, changeInfo: chrome.tabs.TabChangeInfo) => {
+    const onUpdated = (updatedTabId: number, changeInfo: chrome.tabs.OnUpdatedInfo) => {
       if (updatedTabId !== tabId || settled) return;
       if (changeInfo.status === 'loading' || changeInfo.url) {
         settled = true;
