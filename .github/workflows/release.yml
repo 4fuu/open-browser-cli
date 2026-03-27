@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version tag (e.g. v0.2.0)"
+        description: "Release tag (e.g. 0.2.0 or v0.2.0)"
         required: true
         type: string
 
@@ -120,7 +120,7 @@ jobs:
         run: |
           VER="${VERSION#v}"
           sed -i "s|\"version\": \".*\"|\"version\": \"$VER\"|" bucket/browser-cli.json
-          sed -i "s|/download/v[^/]*/|/download/$VERSION/|g" bucket/browser-cli.json
+          sed -i -E "s|/download/[^/]*/|/download/$VERSION/|g" bucket/browser-cli.json
           sed -i "s|\"hash\": \".*\"|\"hash\": \"$WIN_X86\"|" bucket/browser-cli.json
 
       - name: Update Homebrew formula
@@ -133,7 +133,7 @@ jobs:
         run: |
           VER="${VERSION#v}"
           sed -i "s|version \".*\"|version \"$VER\"|" Formula/browser-cli.rb
-          sed -i "s|/download/v[^/]*/|/download/$VERSION/|g" Formula/browser-cli.rb
+          sed -i -E "s|/download/[^/]*/|/download/$VERSION/|g" Formula/browser-cli.rb
           sed -i "s|sha256 \".*\" # macos_arm64|sha256 \"$MACOS_ARM64\" # macos_arm64|" Formula/browser-cli.rb
           sed -i "s|sha256 \".*\" # macos_x86|sha256 \"$MACOS_X86\" # macos_x86|" Formula/browser-cli.rb
           sed -i "s|sha256 \".*\" # linux_arm64|sha256 \"$LINUX_ARM64\" # linux_arm64|" Formula/browser-cli.rb
