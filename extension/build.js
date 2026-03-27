@@ -2,7 +2,7 @@ import * as esbuild from 'esbuild';
 
 const common = {
   bundle: true,
-  format: 'esm',
+  format: 'iife',
   target: 'es2022',
   sourcemap: true,
 };
