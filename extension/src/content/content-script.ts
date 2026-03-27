@@ -12,14 +12,30 @@ const elementMap = new Map<string, WeakRef<Element>>();
 let cursorOverlay: HTMLElement | null = null;
 
 const SKIPPED_TAGS = new Set(['script', 'style', 'noscript', 'svg', 'path']);
+const INTERACTIVE_SELECTOR = [
+  'a[href]',
+  'button',
+  'input:not([type="hidden"])',
+  'textarea',
+  'select',
+  '[role="button"]',
+  '[onclick]',
+  '[contenteditable="true"]',
+  '[tabindex]:not([tabindex="-1"])',
+].join(',');
+
 const CHUNK_SIZE = 100;
 const CHUNK_DELAY_MS = 8;
 const STABILITY_WINDOW_MS = 500;
 const DEFAULT_WAIT_TIMEOUT_MS = 30_000;
 const TYPE_DELAY_MIN_MS = 40;
 const TYPE_DELAY_MAX_MS = 120;
-const MOUSE_APPROACH_STEPS_MIN = 3;
-const MOUSE_APPROACH_STEPS_MAX = 6;
+const IDLE_MOVE_DURATION_MIN_MS = 500;
+const IDLE_MOVE_DURATION_MAX_MS = 1400;
+const IDLE_PAUSE_MIN_MS = 250;
+const IDLE_PAUSE_MAX_MS = 900;
+const TASK_MOVE_DURATION_MIN_MS = 240;
+const TASK_MOVE_DURATION_MAX_MS = 560;
 
 let refCounter = 0;
 
@@ -28,6 +44,246 @@ interface WaitResult {
   changed: boolean;
   waitedMs: number;
 }
+
+interface Point {
+  x: number;
+  y: number;
+}
+
+interface Bounds {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+  width: number;
+  height: number;
+}
+
+class CursorAgent {
+  private enabled = false;
+  private sessionId: string | null = null;
+  private taskMode = false;
+  private currentX = Math.max(window.innerWidth * 0.35, 24);
+  private currentY = Math.max(window.innerHeight * 0.22, 24);
+  private idleLoopToken = 0;
+  private motionToken = 0;
+  private hoveredElement: Element | null = null;
+
+  constructor() {
+    document.addEventListener('visibilitychange', () => {
+      if (!this.enabled) {
+        return;
+      }
+      if (document.hidden) {
+        this.cancelMotion();
+        return;
+      }
+      this.moveInstant(this.currentX, this.currentY);
+      if (!this.taskMode) {
+        this.startIdleLoop();
+      }
+    });
+
+    window.addEventListener('resize', () => {
+      if (!this.enabled) {
+        return;
+      }
+      const point = this.clampPoint({ x: this.currentX, y: this.currentY });
+      this.moveInstant(point.x, point.y);
+    });
+  }
+
+  start(sessionId: string): void {
+    this.enabled = true;
+    this.sessionId = sessionId;
+    this.ensureCursor();
+    const point = this.clampPoint({ x: this.currentX, y: this.currentY });
+    this.moveInstant(point.x, point.y);
+    this.setTaskMode(false);
+    this.startIdleLoop();
+  }
+
+  stop(sessionId?: string): void {
+    if (sessionId && this.sessionId && sessionId !== this.sessionId) {
+      return;
+    }
+
+    this.enabled = false;
+    this.sessionId = null;
+    this.taskMode = false;
+    this.cancelMotion();
+    this.hoveredElement = null;
+
+    if (cursorOverlay && document.documentElement.contains(cursorOverlay)) {
+      cursorOverlay.remove();
+    }
+    cursorOverlay = null;
+  }
+
+  beginTask(): void {
+    if (!this.enabled) {
+      this.start('implicit');
+    }
+    this.cancelMotion();
+    this.setTaskMode(true);
+  }
+
+  endTask(): void {
+    if (!this.enabled) {
+      return;
+    }
+    this.setTaskMode(false);
+    this.startIdleLoop();
+  }
+
+  async moveTo(point: Point, options?: { durationMs?: number; emitMoveEvents?: boolean }): Promise<boolean> {
+    if (!this.enabled || document.hidden) {
+      return false;
+    }
+
+    const end = this.clampPoint(point);
+    const start = { x: this.currentX, y: this.currentY };
+    const distance = Math.hypot(end.x - start.x, end.y - start.y);
+    if (distance < 1) {
+      this.moveInstant(end.x, end.y);
+      return true;
+    }
+
+    const durationMs = options?.durationMs ?? jitter(TASK_MOVE_DURATION_MIN_MS, TASK_MOVE_DURATION_MAX_MS);
+    const steps = Math.max(10, Math.round(durationMs / 16));
+    const control = {
+      x: (start.x + end.x) / 2 + (Math.random() - 0.5) * Math.min(140, distance * 0.35),
+      y: (start.y + end.y) / 2 + (Math.random() - 0.5) * Math.min(90, distance * 0.25),
+    };
+    const motionToken = ++this.motionToken;
+    let hovered = this.hoveredElement;
+
+    for (let index = 1; index <= steps; index++) {
+      if (!this.enabled || motionToken !== this.motionToken) {
+        return false;
+      }
+
+      const t = easeInOutCubic(index / steps);
+      const x = quadraticBezier(start.x, control.x, end.x, t);
+      const y = quadraticBezier(start.y, control.y, end.y, t);
+      this.moveInstant(x, y);
+
+      if (options?.emitMoveEvents) {
+        hovered = dispatchCursorMoveEvent(hovered, x, y);
+      }
+
+      await delay(jitter(10, 18));
+    }
+
+    this.hoveredElement = hovered;
+    this.moveInstant(end.x, end.y);
+    return motionToken === this.motionToken;
+  }
+
+  async clickPulse(): Promise<void> {
+    if (!this.enabled) {
+      return;
+    }
+
+    const host = this.ensureCursor();
+    host.style.setProperty('--cursor-scale', '0.82');
+    await delay(70);
+    if (!this.enabled) {
+      return;
+    }
+    host.style.setProperty('--cursor-scale', '1');
+    await delay(110);
+  }
+
+  private ensureCursor(): HTMLElement {
+    if (cursorOverlay && document.documentElement.contains(cursorOverlay)) {
+      this.syncAppearance(cursorOverlay);
+      return cursorOverlay;
+    }
+
+    const el = document.createElement('div');
+    el.setAttribute('id', '__browser_cli_cursor__');
+    el.style.cssText =
+      'position:fixed;top:0;left:0;width:0;height:0;overflow:visible;' +
+      'pointer-events:none;z-index:2147483647;margin:0;padding:0;border:none;';
+
+    const shadow = el.attachShadow({ mode: 'open' });
+    shadow.innerHTML =
+      '<style>' +
+      ':host{all:initial;--cursor-fill:#111111;--cursor-stroke:#ffffff;--cursor-scale:1;}' +
+      'svg{display:block;transform:scale(var(--cursor-scale));transform-origin:2px 2px;' +
+      'transition:transform 90ms ease,filter 120ms ease;' +
+      'filter:drop-shadow(0 1px 2px rgba(0,0,0,0.45));}' +
+      'path{fill:var(--cursor-fill);stroke:var(--cursor-stroke);stroke-width:1.5;stroke-linejoin:round;}' +
+      '</style>' +
+      '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="22" viewBox="0 0 14 24" aria-hidden="true">' +
+      '<path d="M 1 1 L 1 19 L 5 14 L 8 22 L 11 21 L 8 13 L 13 13 Z"/>' +
+      '</svg>';
+
+    document.documentElement.appendChild(el);
+    cursorOverlay = el;
+    this.syncAppearance(el);
+    return el;
+  }
+
+  private syncAppearance(host: HTMLElement): void {
+    host.style.setProperty('--cursor-fill', this.taskMode ? '#f5cb23' : '#111111');
+    host.style.setProperty('--cursor-stroke', this.taskMode ? '#6c5600' : '#ffffff');
+    host.style.setProperty('--cursor-scale', '1');
+  }
+
+  private setTaskMode(value: boolean): void {
+    this.taskMode = value;
+    this.syncAppearance(this.ensureCursor());
+  }
+
+  private moveInstant(x: number, y: number): void {
+    const host = this.ensureCursor();
+    this.currentX = x;
+    this.currentY = y;
+    host.style.left = `${Math.round(x)}px`;
+    host.style.top = `${Math.round(y)}px`;
+  }
+
+  private startIdleLoop(): void {
+    if (!this.enabled || this.taskMode || document.hidden) {
+      return;
+    }
+
+    const loopToken = ++this.idleLoopToken;
+    void this.runIdleLoop(loopToken);
+  }
+
+  private async runIdleLoop(loopToken: number): Promise<void> {
+    while (this.enabled && !this.taskMode && !document.hidden && loopToken === this.idleLoopToken) {
+      const point = pickIdlePoint();
+      await this.moveTo(point, {
+        durationMs: jitter(IDLE_MOVE_DURATION_MIN_MS, IDLE_MOVE_DURATION_MAX_MS),
+        emitMoveEvents: false,
+      });
+
+      if (!this.enabled || this.taskMode || document.hidden || loopToken !== this.idleLoopToken) {
+        return;
+      }
+
+      await delay(jitter(IDLE_PAUSE_MIN_MS, IDLE_PAUSE_MAX_MS));
+    }
+  }
+
+  private cancelMotion(): void {
+    this.idleLoopToken += 1;
+    this.motionToken += 1;
+  }
+
+  private clampPoint(point: Point): Point {
+    return {
+      x: clamp(point.x, 8, Math.max(8, window.innerWidth - 8)),
+      y: clamp(point.y, 8, Math.max(8, window.innerHeight - 8)),
+    };
+  }
+}
+
+const cursorAgent = new CursorAgent();
 
 chrome.runtime.onMessage.addListener(
   (
@@ -51,8 +307,15 @@ async function handleMessage(req: ContentRequest): Promise<ContentResponse> {
         return await handleType(req);
       case 'wait':
         return await handleWait(req);
+      case 'presence_start':
+        return handlePresenceStart(req);
+      case 'presence_stop':
+        return handlePresenceStop(req);
       default:
-        return { ok: false, error: `Unknown message type: ${String((req as { type?: unknown }).type)}` };
+        return {
+          ok: false,
+          error: `Unknown message type: ${String((req as { type?: unknown }).type)}`,
+        };
     }
   } catch (error) {
     return {
@@ -60,6 +323,30 @@ async function handleMessage(req: ContentRequest): Promise<ContentResponse> {
       error: error instanceof Error ? error.message : String(error),
     };
   }
+}
+
+function handlePresenceStart(req: ContentRequest): ContentResponse {
+  const sessionId = requireString(req.params.session_id, 'session_id');
+  cursorAgent.start(sessionId);
+  return {
+    ok: true,
+    data: {
+      session_id: sessionId,
+      cursor: 'started',
+    },
+  };
+}
+
+function handlePresenceStop(req: ContentRequest): ContentResponse {
+  const sessionId = optionalString(req.params.session_id);
+  cursorAgent.stop(sessionId);
+  return {
+    ok: true,
+    data: {
+      session_id: sessionId,
+      cursor: 'stopped',
+    },
+  };
 }
 
 async function handleSnapshot(req: ContentRequest): Promise<ContentResponse> {
@@ -90,36 +377,34 @@ async function handleClick(req: ContentRequest): Promise<ContentResponse> {
   const beforeUrl = location.href;
   const beforeTitle = document.title;
 
-  if (target instanceof HTMLElement) {
-    target.scrollIntoView({ block: 'center', inline: 'center' });
+  cursorAgent.beginTask();
+
+  try {
+    const point = await prepareInteractionPoint(target);
+    await cursorAgent.moveTo(point, {
+      durationMs: jitter(TASK_MOVE_DURATION_MIN_MS, TASK_MOVE_DURATION_MAX_MS),
+      emitMoveEvents: true,
+    });
+    await delay(jitter(30, 90));
+    await performClickSequence(target, point);
+
+    const stability = await waitForPageStability({ timeoutMs: 5_000 });
+    const snapshot = collectSnapshot();
+    await streamSnapshot(sessionId, requestId, snapshot);
+
+    return {
+      ok: true,
+      data: {
+        action: 'click',
+        changed: stability.changed || beforeUrl !== location.href || beforeTitle !== document.title,
+        navigated: beforeUrl !== location.href,
+        url: location.href,
+        title: document.title,
+      },
+    };
+  } finally {
+    cursorAgent.endTask();
   }
-  await nextFrame();
-
-  const eventInit = mouseEventInit(target);
-  await simulateMouseApproach(target, eventInit);
-  moveCursor(eventInit.clientX ?? 0, eventInit.clientY ?? 0);
-  target.dispatchEvent(new MouseEvent('mouseover', eventInit));
-  await delay(jitter(5, 20));
-  target.dispatchEvent(new MouseEvent('mousedown', eventInit));
-  await delay(jitter(50, 150));
-  target.dispatchEvent(new MouseEvent('mouseup', eventInit));
-  await delay(jitter(5, 20));
-  target.dispatchEvent(new MouseEvent('click', eventInit));
-
-  const stability = await waitForPageStability({ timeoutMs: 5_000 });
-  const snapshot = collectSnapshot();
-  await streamSnapshot(sessionId, requestId, snapshot);
-
-  return {
-    ok: true,
-    data: {
-      action: 'click',
-      changed: stability.changed || beforeUrl !== location.href || beforeTitle !== document.title,
-      navigated: beforeUrl !== location.href,
-      url: location.href,
-      title: document.title,
-    },
-  };
 }
 
 async function handleType(req: ContentRequest): Promise<ContentResponse> {
@@ -138,51 +423,259 @@ async function handleType(req: ContentRequest): Promise<ContentResponse> {
   const beforeUrl = location.href;
   const beforeTitle = document.title;
 
-  focusElement(target);
-  clearEditableValue(target);
+  cursorAgent.beginTask();
 
-  for (const char of text) {
-    dispatchKeyboardEvent(target, 'keydown', char);
-    insertText(target, char);
-    dispatchInputEvent(target, char);
-    dispatchKeyboardEvent(target, 'keyup', char);
-    await delay(jitter(TYPE_DELAY_MIN_MS, TYPE_DELAY_MAX_MS));
+  try {
+    const point = await prepareInteractionPoint(target);
+    await cursorAgent.moveTo(point, {
+      durationMs: jitter(TASK_MOVE_DURATION_MIN_MS, TASK_MOVE_DURATION_MAX_MS),
+      emitMoveEvents: true,
+    });
+    await delay(jitter(30, 90));
+    await performFocusSequence(target, point);
+
+    focusElement(target);
+    clearEditableValue(target);
+
+    for (const char of text) {
+      dispatchKeyboardEvent(target, 'keydown', char);
+      insertText(target, char);
+      dispatchInputEvent(target, char);
+      dispatchKeyboardEvent(target, 'keyup', char);
+      await delay(jitter(TYPE_DELAY_MIN_MS, TYPE_DELAY_MAX_MS));
+    }
+
+    target.dispatchEvent(new Event('change', { bubbles: true }));
+    if (target instanceof HTMLElement) {
+      target.blur();
+    }
+
+    const stability = await waitForPageStability({ timeoutMs: 5_000 });
+    const snapshot = collectSnapshot();
+    await streamSnapshot(sessionId, requestId, snapshot);
+
+    return {
+      ok: true,
+      data: {
+        action: 'type',
+        changed: stability.changed || beforeUrl !== location.href || beforeTitle !== document.title,
+        navigated: beforeUrl !== location.href,
+        url: location.href,
+        title: document.title,
+      },
+    };
+  } finally {
+    cursorAgent.endTask();
   }
-
-  target.dispatchEvent(new Event('change', { bubbles: true }));
-  if (target instanceof HTMLElement) {
-    target.blur();
-  }
-
-  const stability = await waitForPageStability({ timeoutMs: 5_000 });
-  const snapshot = collectSnapshot();
-  await streamSnapshot(sessionId, requestId, snapshot);
-
-  return {
-    ok: true,
-    data: {
-      action: 'type',
-      changed: stability.changed || beforeUrl !== location.href || beforeTitle !== document.title,
-      navigated: beforeUrl !== location.href,
-      url: location.href,
-      title: document.title,
-    },
-  };
 }
 
 async function handleWait(req: ContentRequest): Promise<ContentResponse> {
   const selector = optionalString(req.params.selector);
   const timeout = optionalNumber(req.params.timeout) ?? DEFAULT_WAIT_TIMEOUT_MS;
-  const result = await waitForPageStability({ selector, timeoutMs: timeout });
+
+  cursorAgent.beginTask();
+  try {
+    const result = await waitForPageStability({ selector, timeoutMs: timeout });
+    return {
+      ok: true,
+      data: {
+        selector,
+        selector_found: result.selectorFound,
+        changed: result.changed,
+        waited_ms: result.waitedMs,
+      },
+    };
+  } finally {
+    cursorAgent.endTask();
+  }
+}
+
+async function prepareInteractionPoint(target: Element): Promise<Point> {
+  if (target instanceof HTMLElement) {
+    target.scrollIntoView({ block: 'center', inline: 'center' });
+  }
+
+  await nextFrame();
+  await nextFrame();
+
+  const point = chooseInteractionPoint(target);
+  if (!point) {
+    throw new Error('Target is not visible');
+  }
+  return point;
+}
+
+async function performClickSequence(target: Element, point: Point): Promise<void> {
+  const dispatchTarget = resolveDispatchTarget(target, point);
+  const eventInit = mouseEventInitFromPoint(point);
+
+  dispatchHoverTransition(dispatchTarget, eventInit);
+  await delay(jitter(25, 80));
+  void cursorAgent.clickPulse();
+  dispatchTarget.dispatchEvent(new MouseEvent('mousedown', eventInit));
+  if (dispatchTarget instanceof HTMLElement) {
+    dispatchTarget.focus();
+  }
+  await delay(jitter(55, 135));
+  dispatchTarget.dispatchEvent(new MouseEvent('mouseup', eventInit));
+  await delay(jitter(8, 20));
+  dispatchTarget.dispatchEvent(new MouseEvent('click', eventInit));
+}
+
+async function performFocusSequence(target: Element, point: Point): Promise<void> {
+  const dispatchTarget = resolveDispatchTarget(target, point);
+  const eventInit = mouseEventInitFromPoint(point);
+
+  dispatchHoverTransition(dispatchTarget, eventInit);
+  await delay(jitter(20, 60));
+  void cursorAgent.clickPulse();
+  dispatchTarget.dispatchEvent(new MouseEvent('mousedown', eventInit));
+  if (dispatchTarget instanceof HTMLElement) {
+    dispatchTarget.focus();
+  }
+  await delay(jitter(30, 90));
+  dispatchTarget.dispatchEvent(new MouseEvent('mouseup', eventInit));
+  await delay(jitter(6, 16));
+  dispatchTarget.dispatchEvent(new MouseEvent('click', eventInit));
+}
+
+function dispatchHoverTransition(target: Element, eventInit: MouseEventInit): void {
+  target.dispatchEvent(new MouseEvent('mouseover', eventInit));
+  target.dispatchEvent(new MouseEvent('mousemove', eventInit));
+}
+
+function resolveDispatchTarget(target: Element, point: Point): Element {
+  const hit = resolvePointElement(point.x, point.y);
+  if (hit && isRelatedTarget(target, hit)) {
+    return hit;
+  }
+  return target;
+}
+
+function chooseInteractionPoint(target: Element): Point | null {
+  const bounds = getVisibleBounds(target);
+  if (!bounds) {
+    return null;
+  }
+
+  const maxInsetX = Math.max(0, bounds.width / 2 - 1);
+  const maxInsetY = Math.max(0, bounds.height / 2 - 1);
+  const insetX = clamp(bounds.width * 0.18, 2, Math.max(2, maxInsetX));
+  const insetY = clamp(bounds.height * 0.18, 2, Math.max(2, maxInsetY));
+  const left = bounds.left + insetX;
+  const right = bounds.right - insetX;
+  const top = bounds.top + insetY;
+  const bottom = bounds.bottom - insetY;
+
+  const candidates: Point[] = [
+    { x: bounds.left + bounds.width / 2, y: bounds.top + bounds.height / 2 },
+    { x: left, y: top },
+    { x: right, y: top },
+    { x: left, y: bottom },
+    { x: right, y: bottom },
+    { x: (left + right) / 2, y: top },
+    { x: (left + right) / 2, y: bottom },
+  ];
+
+  for (let index = 0; index < 4; index++) {
+    candidates.push({
+      x: left + Math.random() * Math.max(1, right - left),
+      y: top + Math.random() * Math.max(1, bottom - top),
+    });
+  }
+
+  for (const point of candidates) {
+    if (pointHitsTarget(target, point)) {
+      return point;
+    }
+  }
+
+  return candidates[0] ?? null;
+}
+
+function pointHitsTarget(target: Element, point: Point): boolean {
+  const hit = resolvePointElement(point.x, point.y);
+  return hit ? isRelatedTarget(target, hit) : false;
+}
+
+function isRelatedTarget(target: Element, hit: Element): boolean {
+  return target === hit || target.contains(hit) || hit.contains(target);
+}
+
+function resolvePointElement(clientX: number, clientY: number): Element | null {
+  const x = clamp(clientX, 0, Math.max(0, window.innerWidth - 1));
+  const y = clamp(clientY, 0, Math.max(0, window.innerHeight - 1));
+  return document.elementFromPoint(x, y);
+}
+
+function pickIdlePoint(): Point {
+  const anchors = collectVisibleAnchors();
+  if (anchors.length > 0 && Math.random() < 0.72) {
+    return anchors[Math.floor(Math.random() * anchors.length)] ?? randomViewportPoint();
+  }
+  return randomViewportPoint();
+}
+
+function collectVisibleAnchors(): Point[] {
+  const points: Point[] = [];
+  const candidates = Array.from(document.querySelectorAll(INTERACTIVE_SELECTOR));
+
+  for (const element of candidates) {
+    if (points.length >= 48) {
+      break;
+    }
+    if (!isVisible(element)) {
+      continue;
+    }
+    const bounds = getVisibleBounds(element);
+    if (!bounds) {
+      continue;
+    }
+
+    points.push({
+      x: bounds.left + bounds.width * (0.25 + Math.random() * 0.5),
+      y: bounds.top + bounds.height * (0.25 + Math.random() * 0.5),
+    });
+  }
+
+  return points;
+}
+
+function randomViewportPoint(): Point {
   return {
-    ok: true,
-    data: {
-      selector,
-      selector_found: result.selectorFound,
-      changed: result.changed,
-      waited_ms: result.waitedMs,
-    },
+    x: 20 + Math.random() * Math.max(20, window.innerWidth - 40),
+    y: 20 + Math.random() * Math.max(20, window.innerHeight - 40),
   };
+}
+
+function getVisibleBounds(element: Element): Bounds | null {
+  const rect = element.getBoundingClientRect();
+  const left = clamp(rect.left, 0, window.innerWidth);
+  const right = clamp(rect.right, 0, window.innerWidth);
+  const top = clamp(rect.top, 0, window.innerHeight);
+  const bottom = clamp(rect.bottom, 0, window.innerHeight);
+  const width = right - left;
+  const height = bottom - top;
+
+  if (width <= 0 || height <= 0) {
+    return null;
+  }
+
+  return { left, top, right, bottom, width, height };
+}
+
+function dispatchCursorMoveEvent(previous: Element | null, clientX: number, clientY: number): Element | null {
+  const target = resolvePointElement(clientX, clientY);
+  const eventInit = mouseEventInitFromPoint({ x: clientX, y: clientY });
+
+  if (previous && previous !== target) {
+    previous.dispatchEvent(new MouseEvent('mouseout', eventInit));
+  }
+  if (target && previous !== target) {
+    target.dispatchEvent(new MouseEvent('mouseover', eventInit));
+  }
+  (target ?? document.documentElement).dispatchEvent(new MouseEvent('mousemove', eventInit));
+  return target;
 }
 
 function collectSnapshot(): RawSnapshot {
@@ -420,8 +913,6 @@ function isVisible(element: Element): boolean {
   if (htmlElement.offsetParent !== null) {
     return true;
   }
-  // Fallback for position:fixed/sticky elements which have null offsetParent.
-  // getBoundingClientRect is cheaper than getComputedStyle.
   const rect = element.getBoundingClientRect();
   return rect.width > 0 && rect.height > 0;
 }
@@ -435,88 +926,32 @@ function toAbsoluteRect(rect: DOMRect): Rect {
   };
 }
 
-function mouseEventInit(target: Element): MouseEventInit {
-  const rect = target.getBoundingClientRect();
-  // Land within the central 40% of the element to avoid edges.
-  const clientX = rect.left + rect.width * (0.3 + Math.random() * 0.4);
-  const clientY = rect.top + rect.height * (0.3 + Math.random() * 0.4);
+function mouseEventInitFromPoint(point: Point): MouseEventInit {
   return {
     bubbles: true,
     cancelable: true,
     composed: true,
-    clientX,
-    clientY,
+    clientX: point.x,
+    clientY: point.y,
     button: 0,
   };
 }
 
-async function simulateMouseApproach(
-  target: Element,
-  finalInit: MouseEventInit,
-): Promise<void> {
-  const finalX = finalInit.clientX ?? 0;
-  const finalY = finalInit.clientY ?? 0;
-  const startX = finalX + (Math.random() - 0.5) * 300;
-  const startY = finalY + (Math.random() - 0.5) * 200;
-  const steps =
-    MOUSE_APPROACH_STEPS_MIN +
-    Math.floor(Math.random() * (MOUSE_APPROACH_STEPS_MAX - MOUSE_APPROACH_STEPS_MIN + 1));
-
-  for (let i = 1; i <= steps; i++) {
-    const t = i / steps;
-    const x = startX + (finalX - startX) * t;
-    const y = startY + (finalY - startY) * t;
-    moveCursor(x, y);
-    target.dispatchEvent(
-      new MouseEvent('mousemove', {
-        bubbles: true,
-        cancelable: true,
-        composed: true,
-        clientX: x,
-        clientY: y,
-        button: 0,
-      }),
-    );
-    await delay(jitter(10, 30));
-  }
-}
-
-function getOrCreateCursor(): HTMLElement {
-  if (cursorOverlay && document.documentElement.contains(cursorOverlay)) {
-    return cursorOverlay;
-  }
-  const el = document.createElement('div');
-  el.setAttribute('id', '__browser_cli_cursor__');
-  // position:fixed on a direct child of <html> is unaffected by transforms on <body>.
-  // No transform/filter on the host itself to avoid creating a new containing block.
-  // All layout via top/left so the element never clips itself.
-  el.style.cssText =
-    'position:fixed;top:0;left:0;width:0;height:0;overflow:visible;' +
-    'pointer-events:none;z-index:2147483647;margin:0;padding:0;border:none;';
-
-  // Shadow DOM isolates the SVG from page stylesheets.
-  const shadow = el.attachShadow({ mode: 'open' });
-  shadow.innerHTML =
-    '<style>:host{all:initial}svg{display:block;filter:drop-shadow(0 1px 2px rgba(0,0,0,0.5));' +
-    'transition:transform 25ms ease-out;}</style>' +
-    '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="22" viewBox="0 0 14 24">' +
-    '<path d="M 1 1 L 1 19 L 5 14 L 8 22 L 11 21 L 8 13 L 13 13 Z"' +
-    ' fill="black" stroke="white" stroke-width="1.5" stroke-linejoin="round"/>' +
-    '</svg>';
-
-  document.documentElement.appendChild(el);
-  cursorOverlay = el;
-  return el;
-}
-
-function moveCursor(clientX: number, clientY: number): void {
-  const el = getOrCreateCursor();
-  el.style.left = `${clientX}px`;
-  el.style.top = `${clientY}px`;
-}
-
 function jitter(min: number, max: number): number {
   return min + Math.random() * (max - min);
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max);
+}
+
+function quadraticBezier(start: number, control: number, end: number, t: number): number {
+  const inverse = 1 - t;
+  return inverse * inverse * start + 2 * inverse * t * control + t * t * end;
+}
+
+function easeInOutCubic(t: number): number {
+  return t < 0.5 ? 4 * t * t * t : 1 - ((-2 * t + 2) ** 3) / 2;
 }
 
 function isEditable(element: Element): boolean {

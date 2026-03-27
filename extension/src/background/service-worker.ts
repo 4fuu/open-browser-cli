@@ -124,6 +124,14 @@ async function handleOpen(req: Request): Promise<Response> {
   };
   sessions.set(sessionId, session);
 
+  await sendToContent(tab.id, {
+    type: 'presence_start',
+    params: {
+      session_id: sessionId,
+      request_id: req.id,
+    },
+  });
+
   const snapshotResult = await sendToContent(tab.id, {
     type: 'snapshot',
     params: {
@@ -144,8 +152,20 @@ async function handleOpen(req: Request): Promise<Response> {
 
 async function handleClose(req: Request): Promise<Response> {
   if (req.params.all === true) {
-    const tabIds = Array.from(sessions.values()).map((session) => session.tab_id);
+    const activeSessions = Array.from(sessions.values());
+    const tabIds = activeSessions.map((session) => session.tab_id);
     const closed = tabIds.length;
+    await Promise.all(
+      activeSessions.map((session) =>
+        sendToContent(session.tab_id, {
+          type: 'presence_stop',
+          params: {
+            session_id: session.session_id,
+            request_id: req.id,
+          },
+        }).catch(() => ({ ok: false })),
+      ),
+    );
     if (tabIds.length > 0) {
       await chrome.tabs.remove(tabIds);
     }
@@ -163,6 +183,13 @@ async function handleClose(req: Request): Promise<Response> {
     return { id: req.id, ok: false, error: `Session not found: ${sessionId}` };
   }
 
+  await sendToContent(session.tab_id, {
+    type: 'presence_stop',
+    params: {
+      session_id: session.session_id,
+      request_id: req.id,
+    },
+  });
   await chrome.tabs.remove(session.tab_id);
   sessions.delete(sessionId);
   return { id: req.id, ok: true };
@@ -425,6 +452,13 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
     }
     if (changeInfo.status === 'complete') {
       session.status = 'active';
+      void sendToContent(session.tab_id, {
+        type: 'presence_start',
+        params: {
+          session_id: session.session_id,
+          request_id: `presence-${Date.now()}`,
+        },
+      });
     }
   }
 });
