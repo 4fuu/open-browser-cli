@@ -34,6 +34,22 @@ description: "Drives a real browser session via browser-cli: open stateful sessi
 - If a flow spans multiple tabs or destinations, preserve the current state by opening links with `click --new-session`.
 - Treat this tool as stateful browser automation with structured output, not as HTML scraping.
 
+## Pause for user confirmation
+
+Stop and wait for the user when the browser flow crosses an authentication, consent, or high-risk boundary. `browser-cli` preserves real session state, so continuing blindly can leak secrets or trigger actions the user did not intend.
+
+- Pause when the page clearly requires login, sign-in, SSO selection, passkey use, 2FA, email/SMS verification, CAPTCHA, or any other human identity check.
+- Pause before entering secrets unless the user explicitly asked for that exact step and already provided the credential material through a trusted channel.
+- Pause before submitting actions with external side effects such as purchase, payment, transfer, delete, publish, send, authorize, install, connect account, or accept legal terms.
+- Pause when the next click is ambiguous and could either continue navigation or commit a real account change.
+- Pause when a site asks the user to solve a challenge outside normal DOM automation, such as a hardware key, QR login, native app approval, or anti-bot checkpoint.
+
+When you pause:
+
+- Tell the user exactly what blocked the flow and what page or control triggered the stop.
+- Ask the user to complete the sensitive step manually in the browser if appropriate.
+- After the user confirms they are done, refresh context with `browser-cli page <session_id> --fresh` before taking any further action.
+
 ## Use this skill when
 
 - The task needs a real browser tab with preserved login state, cookies, history, or form state.
