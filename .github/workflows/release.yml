@@ -34,6 +34,13 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - name: Compute build version
+        shell: bash
+        run: |
+          SHORT_SHA="$(git rev-parse --short HEAD)"
+          echo "SHORT_SHA=$SHORT_SHA" >> "$GITHUB_ENV"
+          echo "BUILD_VERSION=${{ inputs.version }} ($SHORT_SHA)" >> "$GITHUB_ENV"
+
       - name: Install cross-compile toolchain (aarch64 Linux)
         if: matrix.target == 'aarch64-unknown-linux-gnu'
         run: |
@@ -54,6 +61,8 @@ jobs:
           restore-keys: ${{ runner.os }}-${{ matrix.target }}-cargo-
 
       - name: Build
+        env:
+          BROWSER_CLI_VERSION: ${{ env.BUILD_VERSION }}
         run: cargo build --release --target ${{ matrix.target }}
 
       - name: Package (Unix)
@@ -182,6 +191,13 @@ jobs:
         with:
           ref: main
 
+      - name: Compute release title suffix
+        shell: bash
+        run: |
+          SHORT_SHA="$(git rev-parse --short HEAD)"
+          echo "SHORT_SHA=$SHORT_SHA" >> "$GITHUB_ENV"
+          echo "RELEASE_TITLE=${{ inputs.version }} ($SHORT_SHA)" >> "$GITHUB_ENV"
+
       - uses: actions/download-artifact@v7
         with:
           path: artifacts
@@ -192,7 +208,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release create "${{ inputs.version }}" \
-            --title "${{ inputs.version }}" \
+            --title "${{ env.RELEASE_TITLE }}" \
             --generate-notes \
             artifacts/*
 

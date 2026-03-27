@@ -405,8 +405,8 @@ fn element_text(element: &Element) -> String {
             placeholder.as_deref(),
             value.as_deref(),
         ]),
-        Element::List { items } => items.join(" "),
-        Element::Table { rows } => rows
+        Element::List { items, .. } => items.join(" "),
+        Element::Table { rows, .. } => rows
             .iter()
             .flat_map(|r| r.iter())
             .cloned()

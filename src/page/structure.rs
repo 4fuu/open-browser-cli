@@ -7,6 +7,7 @@ use crate::protocol::messages::{RawNode, RawSnapshot, Rect};
 
 const MAX_TEXT_LEN: usize = 200;
 const MAX_PAGE_ELEMENTS: usize = 200;
+const MAX_BLOCK_ITEMS: usize = 20;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PageData {
@@ -22,6 +23,8 @@ pub struct PageData {
     pub element_refs: HashMap<String, String>,
     #[serde(skip)]
     pub full_texts: HashMap<String, String>,
+    #[serde(skip)]
+    pub full_blocks: HashMap<String, StoredBlock>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -75,11 +78,52 @@ pub enum Element {
         disabled: bool,
     },
     List {
+        id: Option<String>,
         items: Vec<String>,
+        truncated: bool,
+        shown: usize,
+        total_items: usize,
+        current_page: u32,
+        total_pages: u32,
     },
     Table {
+        id: Option<String>,
         rows: Vec<Vec<String>>,
+        truncated: bool,
+        shown: usize,
+        total_items: usize,
+        current_page: u32,
+        total_pages: u32,
     },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum BlockData {
+    List {
+        id: String,
+        items: Vec<String>,
+        truncated: bool,
+        shown: usize,
+        total_items: usize,
+        current_page: u32,
+        total_pages: u32,
+    },
+    Table {
+        id: String,
+        rows: Vec<Vec<String>>,
+        truncated: bool,
+        shown: usize,
+        total_items: usize,
+        current_page: u32,
+        total_pages: u32,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub enum StoredBlock {
+    List { items: Vec<String> },
+    Table { rows: Vec<Vec<String>> },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -105,6 +149,7 @@ struct ProcessedNode {
     element: Element,
     ref_id: Option<String>,
     full_text: Option<(String, String)>,
+    full_block: Option<(String, StoredBlock)>,
 }
 
 #[derive(Debug, Clone)]
@@ -121,7 +166,7 @@ pub fn truncate_text(text: &str, max_len: usize) -> String {
         text.to_string()
     } else {
         let truncated: String = chars[..max_len].iter().collect();
-        format!("{truncated}…")
+        format!("{truncated}[...truncated]")
     }
 }
 
@@ -166,6 +211,7 @@ pub fn parse_page_from_snapshot(
 
     let mut next_element_id = 1usize;
     let mut next_text_id = 1usize;
+    let mut next_block_id = 1usize;
     let mut processed = Vec::new();
     let mut pending_text: Option<PendingText> = None;
     let mut consumed: HashSet<&str> = HashSet::new();
@@ -189,7 +235,12 @@ pub fn parse_page_from_snapshot(
                 element: interactive.into_element(id),
                 ref_id: Some(node.ref_id.clone()),
                 full_text: None,
+                full_block: None,
             });
+            continue;
+        }
+
+        if has_interactive_ancestor(node, &node_by_ref) {
             continue;
         }
 
@@ -198,12 +249,14 @@ pub fn parse_page_from_snapshot(
             let items = collect_list_items(&node.ref_id, &children_by_parent, &mut consumed);
             consumed.insert(node.ref_id.as_str());
             if !items.is_empty() {
+                let (element, full_block) = build_list_element(items, &mut next_block_id);
                 processed.push(ProcessedNode {
                     order,
                     interactive: false,
-                    element: Element::List { items },
+                    element,
                     ref_id: None,
                     full_text: None,
+                    full_block,
                 });
             }
             continue;
@@ -214,12 +267,14 @@ pub fn parse_page_from_snapshot(
             let rows = collect_table_rows(&node.ref_id, &children_by_parent, &mut consumed);
             consumed.insert(node.ref_id.as_str());
             if !rows.is_empty() {
+                let (element, full_block) = build_table_element(rows, &mut next_block_id);
                 processed.push(ProcessedNode {
                     order,
                     interactive: false,
-                    element: Element::Table { rows },
+                    element,
                     ref_id: None,
                     full_text: None,
+                    full_block,
                 });
             }
             continue;
@@ -233,6 +288,7 @@ pub fn parse_page_from_snapshot(
                 element: Element::Heading { level, text },
                 ref_id: None,
                 full_text: None,
+                full_block: None,
             });
             continue;
         }
@@ -286,6 +342,7 @@ pub fn parse_page_from_snapshot(
     let mut elements = Vec::with_capacity(selected.len());
     let mut element_refs = HashMap::new();
     let mut full_texts = HashMap::new();
+    let mut full_blocks = HashMap::new();
 
     for node in selected {
         if let Some(ref_id) = node.ref_id {
@@ -294,6 +351,9 @@ pub fn parse_page_from_snapshot(
         }
         if let Some((text_id, full_text)) = node.full_text {
             full_texts.insert(text_id, full_text);
+        }
+        if let Some((block_id, block)) = node.full_block {
+            full_blocks.insert(block_id, block);
         }
         elements.push(node.element);
     }
@@ -309,7 +369,18 @@ pub fn parse_page_from_snapshot(
         elements,
         element_refs,
         full_texts,
+        full_blocks,
     })
+}
+
+pub fn resolve_block(
+    page: &PageData,
+    block_id: &str,
+    requested_page: Option<u32>,
+) -> Option<BlockData> {
+    page.full_blocks
+        .get(block_id)
+        .map(|block| block.resolve(block_id, requested_page))
 }
 
 pub fn search_snapshot(snapshot: &RawSnapshot, query: &str) -> SearchResults {
@@ -727,6 +798,7 @@ fn flush_pending_text(
         },
         ref_id: None,
         full_text: full_text_pair,
+        full_block: None,
     });
 }
 
@@ -768,6 +840,123 @@ fn extract_element_id(element: &Element) -> String {
         | Element::Heading { .. }
         | Element::List { .. }
         | Element::Table { .. } => String::new(),
+    }
+}
+
+fn build_list_element(
+    items: Vec<String>,
+    next_block_id: &mut usize,
+) -> (Element, Option<(String, StoredBlock)>) {
+    if items.len() <= MAX_BLOCK_ITEMS {
+        let total_items = items.len();
+        return (
+            Element::List {
+                id: None,
+                items,
+                truncated: false,
+                shown: total_items,
+                total_items,
+                current_page: 1,
+                total_pages: 1,
+            },
+            None,
+        );
+    }
+
+    let block_id = format!("b{}", *next_block_id);
+    *next_block_id += 1;
+    let (current_page, total_pages, start, end) = block_page_bounds(items.len(), Some(1));
+    let page_items = items[start..end].to_vec();
+    (
+        Element::List {
+            id: Some(block_id.clone()),
+            items: page_items,
+            truncated: true,
+            shown: end - start,
+            total_items: items.len(),
+            current_page,
+            total_pages,
+        },
+        Some((block_id, StoredBlock::List { items })),
+    )
+}
+
+fn build_table_element(
+    rows: Vec<Vec<String>>,
+    next_block_id: &mut usize,
+) -> (Element, Option<(String, StoredBlock)>) {
+    if rows.len() <= MAX_BLOCK_ITEMS {
+        let total_items = rows.len();
+        return (
+            Element::Table {
+                id: None,
+                rows,
+                truncated: false,
+                shown: total_items,
+                total_items,
+                current_page: 1,
+                total_pages: 1,
+            },
+            None,
+        );
+    }
+
+    let block_id = format!("b{}", *next_block_id);
+    *next_block_id += 1;
+    let (current_page, total_pages, start, end) = block_page_bounds(rows.len(), Some(1));
+    let page_rows = rows[start..end].to_vec();
+    (
+        Element::Table {
+            id: Some(block_id.clone()),
+            rows: page_rows,
+            truncated: true,
+            shown: end - start,
+            total_items: rows.len(),
+            current_page,
+            total_pages,
+        },
+        Some((block_id, StoredBlock::Table { rows })),
+    )
+}
+
+fn block_page_bounds(total_items: usize, requested_page: Option<u32>) -> (u32, u32, usize, usize) {
+    let total_pages = total_items.div_ceil(MAX_BLOCK_ITEMS).max(1) as u32;
+    let current_page = requested_page.unwrap_or(1).clamp(1, total_pages);
+    let start = (current_page.saturating_sub(1) as usize) * MAX_BLOCK_ITEMS;
+    let end = (start + MAX_BLOCK_ITEMS).min(total_items);
+    (current_page, total_pages, start, end)
+}
+
+impl StoredBlock {
+    fn resolve(&self, block_id: &str, requested_page: Option<u32>) -> BlockData {
+        match self {
+            Self::List { items } => {
+                let (current_page, total_pages, start, end) =
+                    block_page_bounds(items.len(), requested_page);
+                BlockData::List {
+                    id: block_id.to_string(),
+                    items: items[start..end].to_vec(),
+                    truncated: total_pages > 1,
+                    shown: end - start,
+                    total_items: items.len(),
+                    current_page,
+                    total_pages,
+                }
+            }
+            Self::Table { rows } => {
+                let (current_page, total_pages, start, end) =
+                    block_page_bounds(rows.len(), requested_page);
+                BlockData::Table {
+                    id: block_id.to_string(),
+                    rows: rows[start..end].to_vec(),
+                    truncated: total_pages > 1,
+                    shown: end - start,
+                    total_items: rows.len(),
+                    current_page,
+                    total_pages,
+                }
+            }
+        }
     }
 }
 
@@ -963,6 +1152,129 @@ mod tests {
         assert_eq!(page.elements.len(), 1);
         match &page.elements[0] {
             Element::Text { text, .. } => assert_eq!(text, "Hello World"),
+            other => panic!("unexpected element: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_page_does_not_emit_child_text_for_interactive_ancestors() {
+        let button = node("r1", None, "button", "Type / to search", 10.0);
+        let child = node("r2", Some("r1"), "span", "/", 10.0);
+        let page = parse_page_from_snapshot(&snapshot(vec![button, child]), Some(1)).unwrap();
+
+        assert_eq!(page.elements.len(), 1);
+        match &page.elements[0] {
+            Element::Button { text, .. } => assert_eq!(text, "Type / to search"),
+            other => panic!("unexpected element: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn truncate_text_uses_explicit_marker() {
+        let input = "a".repeat(MAX_TEXT_LEN + 5);
+        let truncated = truncate_text(&input, MAX_TEXT_LEN);
+        assert!(truncated.ends_with("[...truncated]"));
+    }
+
+    #[test]
+    fn parse_page_assigns_block_ids_for_long_lists() {
+        let list = node("r1", None, "ul", "", 10.0);
+        let mut nodes = vec![list];
+        for index in 0..(MAX_BLOCK_ITEMS + 5) {
+            nodes.push(node(
+                &format!("r{}", index + 2),
+                Some("r1"),
+                "li",
+                &format!("Item {}", index + 1),
+                10.0 + index as f64 * 20.0,
+            ));
+        }
+
+        let page = parse_page_from_snapshot(&snapshot(nodes), Some(1)).unwrap();
+        let block_id = match &page.elements[0] {
+            Element::List {
+                id,
+                items,
+                truncated,
+                shown,
+                total_items,
+                current_page,
+                total_pages,
+            } => {
+                assert_eq!(id.as_deref(), Some("b1"));
+                assert_eq!(items.len(), MAX_BLOCK_ITEMS);
+                assert!(*truncated);
+                assert_eq!(*shown, MAX_BLOCK_ITEMS);
+                assert_eq!(*total_items, MAX_BLOCK_ITEMS + 5);
+                assert_eq!(*current_page, 1);
+                assert_eq!(*total_pages, 2);
+                id.clone().unwrap()
+            }
+            other => panic!("unexpected element: {other:?}"),
+        };
+
+        let block = resolve_block(&page, &block_id, Some(2)).unwrap();
+        match block {
+            BlockData::List {
+                items,
+                current_page,
+                total_pages,
+                shown,
+                total_items,
+                ..
+            } => {
+                assert_eq!(current_page, 2);
+                assert_eq!(total_pages, 2);
+                assert_eq!(shown, 5);
+                assert_eq!(total_items, MAX_BLOCK_ITEMS + 5);
+                assert_eq!(items.first().map(String::as_str), Some("Item 21"));
+            }
+            other => panic!("unexpected block: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_page_assigns_block_ids_for_long_tables() {
+        let table = node("r1", None, "table", "", 10.0);
+        let mut nodes = vec![table];
+        for index in 0..(MAX_BLOCK_ITEMS + 3) {
+            let tr_ref = format!("tr{}", index + 1);
+            let td_ref = format!("td{}", index + 1);
+            nodes.push(node(
+                &tr_ref,
+                Some("r1"),
+                "tr",
+                "",
+                10.0 + index as f64 * 20.0,
+            ));
+            nodes.push(node(
+                &td_ref,
+                Some(&tr_ref),
+                "td",
+                &format!("Row {}", index + 1),
+                10.0 + index as f64 * 20.0,
+            ));
+        }
+
+        let page = parse_page_from_snapshot(&snapshot(nodes), Some(1)).unwrap();
+        match &page.elements[0] {
+            Element::Table {
+                id,
+                rows,
+                truncated,
+                shown,
+                total_items,
+                current_page,
+                total_pages,
+            } => {
+                assert_eq!(id.as_deref(), Some("b1"));
+                assert_eq!(rows.len(), MAX_BLOCK_ITEMS);
+                assert!(*truncated);
+                assert_eq!(*shown, MAX_BLOCK_ITEMS);
+                assert_eq!(*total_items, MAX_BLOCK_ITEMS + 3);
+                assert_eq!(*current_page, 1);
+                assert_eq!(*total_pages, 2);
+            }
             other => panic!("unexpected element: {other:?}"),
         }
     }

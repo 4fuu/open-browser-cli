@@ -9,10 +9,31 @@ use clap::{Parser, Subcommand, ValueEnum};
 use std::io::IsTerminal;
 use std::path::PathBuf;
 
+mod build_info {
+    pub const fn resolve_version(raw: Option<&'static str>) -> &'static str {
+        match raw {
+            Some(version) => version,
+            None => "unknown",
+        }
+    }
+
+    pub const VERSION: &str = resolve_version(option_env!("BROWSER_CLI_VERSION"));
+}
+
+const HELP_TEMPLATE: &str = "\
+{name} {version}
+{about-with-newline}
+{usage-heading} {usage}
+
+{all-args}{after-help}";
+
 #[derive(Parser)]
 #[command(
     name = "browser-cli",
-    about = "Browser session CLI with Native Messaging relay"
+    version = build_info::VERSION,
+    long_version = build_info::VERSION,
+    about = "Browser session CLI with Native Messaging relay",
+    help_template = HELP_TEMPLATE
 )]
 struct Cli {
     #[command(subcommand)]
@@ -196,6 +217,25 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Get paginated list/table block content
+    Block {
+        /// Session ID
+        session_id: String,
+        /// Block ID returned in page output
+        block_id: String,
+        /// Source page number used to resolve block IDs from page output
+        #[arg(long)]
+        source_page: Option<u32>,
+        /// Block page number
+        #[arg(short, long)]
+        page: Option<u32>,
+        /// Bypass cache and fetch a fresh snapshot from the browser
+        #[arg(long)]
+        fresh: bool,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
     /// Manage and run plugins
     Plugin {
         #[command(subcommand)]
@@ -361,6 +401,14 @@ async fn main() -> anyhow::Result<()> {
             fresh,
             json,
         } => cli::commands::text(session_id, text_id, page, fresh, json).await?,
+        Command::Block {
+            ref session_id,
+            ref block_id,
+            source_page,
+            page,
+            fresh,
+            json,
+        } => cli::commands::block(session_id, block_id, source_page, page, fresh, json).await?,
         Command::Plugin { ref cmd } => match cmd {
             PluginCommand::Run {
                 name,
@@ -395,6 +443,7 @@ fn should_run_as_native_host(args: &[String]) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use super::build_info;
     use super::should_run_as_native_host;
 
     #[test]
@@ -408,5 +457,18 @@ mod tests {
             "browser-cli@browser-cli".into(),
             "/tmp/com.browser_cli.relay.json".into(),
         ]));
+    }
+
+    #[test]
+    fn build_version_falls_back_to_unknown() {
+        assert_eq!(build_info::resolve_version(None), "unknown");
+    }
+
+    #[test]
+    fn build_version_uses_env_value_when_present() {
+        assert_eq!(
+            build_info::resolve_version(Some("v1.2.3 (abc1234)")),
+            "v1.2.3 (abc1234)"
+        );
     }
 }

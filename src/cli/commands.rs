@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use url::Url;
 
 use crate::page::structure::{
-    Element, PageData, parse_page_from_snapshot, parse_snapshot, search_snapshot,
+    Element, PageData, parse_page_from_snapshot, parse_snapshot, resolve_block, search_snapshot,
 };
 use crate::protocol::messages::{Request, Response, actions};
 use crate::transport::client::send_request;
@@ -530,6 +530,31 @@ pub async fn text(
     Ok(())
 }
 
+pub async fn block(
+    session_id: &str,
+    block_id: &str,
+    source_page: Option<u32>,
+    page_num: Option<u32>,
+    fresh: bool,
+    json_mode: bool,
+) -> Result<()> {
+    let page = resolve_page(
+        session_id,
+        source_page,
+        if fresh {
+            actions::GET_PAGE_FRESH
+        } else {
+            actions::GET_PAGE
+        },
+    )
+    .await?;
+    let block = resolve_block(&page, block_id, page_num)
+        .ok_or_else(|| block_lookup_error(session_id, source_page, block_id))?;
+
+    println!("{}", crate::cli::output::format_block(&block, json_mode));
+    Ok(())
+}
+
 pub async fn plugin(name: &str, session_id: &str, json_mode: bool) -> Result<()> {
     let plugin = crate::plugin::loader::load_plugin(name)?;
     let summary = crate::plugin::runner::run_plugin(&plugin, session_id).await?;
@@ -619,6 +644,15 @@ fn text_lookup_error(session_id: &str, page_num: Option<u32>, text_id: &str) -> 
         .unwrap_or_else(|| format!("browser-cli page {session_id}"));
     anyhow::anyhow!(
         "text not found on requested page: {text_id}. Run `{page_hint}` to confirm the current text IDs. If the page changed, try `--fresh`."
+    )
+}
+
+fn block_lookup_error(session_id: &str, source_page: Option<u32>, block_id: &str) -> anyhow::Error {
+    let page_hint = source_page
+        .map(|page| format!("browser-cli page {session_id} -p {page}"))
+        .unwrap_or_else(|| format!("browser-cli page {session_id}"));
+    anyhow::anyhow!(
+        "block not found on the requested page: {block_id}. Run `{page_hint}` to confirm the current block IDs. If the page changed, try `--fresh`."
     )
 }
 
@@ -818,6 +852,14 @@ mod tests {
         let err = text_lookup_error("s1", None, "t3");
         let text = err.to_string();
         assert!(text.contains("browser-cli page s1"));
+        assert!(text.contains("--fresh"));
+    }
+
+    #[test]
+    fn actionable_block_lookup_error_mentions_page_and_fresh() {
+        let err = block_lookup_error("s1", Some(3), "b2");
+        let text = err.to_string();
+        assert!(text.contains("browser-cli page s1 -p 3"));
         assert!(text.contains("--fresh"));
     }
 

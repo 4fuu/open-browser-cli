@@ -1,4 +1,4 @@
-use super::structure::{Element, PageData};
+use super::structure::{BlockData, Element, PageData};
 
 fn escape_xml(s: &str) -> String {
     let mut result = String::with_capacity(s.len());
@@ -37,6 +37,71 @@ pub fn render_xml(page: &PageData) -> String {
     }
 
     out.push_str("</page>\n");
+    out
+}
+
+pub fn render_block_xml(block: &BlockData) -> String {
+    let mut out = String::new();
+    match block {
+        BlockData::List {
+            id,
+            items,
+            truncated,
+            shown,
+            total_items,
+            current_page,
+            total_pages,
+        } => {
+            out.push_str(&format!(
+                "<block id=\"{}\" kind=\"list\" current=\"{}\" total=\"{}\"",
+                escape_xml(id),
+                current_page,
+                total_pages,
+            ));
+            if *truncated {
+                out.push_str(&format!(
+                    " truncated=\"true\" shown=\"{}\" total_items=\"{}\"",
+                    shown, total_items
+                ));
+            }
+            out.push_str(">\n");
+            for item in items {
+                out.push_str(&format!("  <item>{}</item>\n", escape_xml(item)));
+            }
+            out.push_str("</block>\n");
+        }
+        BlockData::Table {
+            id,
+            rows,
+            truncated,
+            shown,
+            total_items,
+            current_page,
+            total_pages,
+        } => {
+            out.push_str(&format!(
+                "<block id=\"{}\" kind=\"table\" current=\"{}\" total=\"{}\"",
+                escape_xml(id),
+                current_page,
+                total_pages,
+            ));
+            if *truncated {
+                out.push_str(&format!(
+                    " truncated=\"true\" shown=\"{}\" total_items=\"{}\"",
+                    shown, total_items
+                ));
+            }
+            out.push_str(">\n");
+            for row in rows {
+                out.push_str("  <row>\n");
+                for cell in row {
+                    out.push_str(&format!("    <cell>{}</cell>\n", escape_xml(cell)));
+                }
+                out.push_str("  </row>\n");
+            }
+            out.push_str("</block>\n");
+        }
+    }
     out
 }
 
@@ -170,15 +235,51 @@ fn render_element(out: &mut String, element: &Element) {
             }
             out.push_str(&format!(">{}</textarea>\n", escape_xml(text)));
         }
-        Element::List { items } => {
-            out.push_str("  <list>\n");
+        Element::List {
+            id,
+            items,
+            truncated,
+            shown,
+            total_items,
+            current_page,
+            total_pages,
+        } => {
+            out.push_str("  <list");
+            if let Some(id) = id {
+                out.push_str(&format!(" id=\"{}\"", escape_xml(id)));
+            }
+            if *truncated {
+                out.push_str(&format!(
+                    " truncated=\"true\" shown=\"{}\" total_items=\"{}\" current=\"{}\" total=\"{}\"",
+                    shown, total_items, current_page, total_pages
+                ));
+            }
+            out.push_str(">\n");
             for item in items {
                 out.push_str(&format!("    <item>{}</item>\n", escape_xml(item)));
             }
             out.push_str("  </list>\n");
         }
-        Element::Table { rows } => {
-            out.push_str("  <table>\n");
+        Element::Table {
+            id,
+            rows,
+            truncated,
+            shown,
+            total_items,
+            current_page,
+            total_pages,
+        } => {
+            out.push_str("  <table");
+            if let Some(id) = id {
+                out.push_str(&format!(" id=\"{}\"", escape_xml(id)));
+            }
+            if *truncated {
+                out.push_str(&format!(
+                    " truncated=\"true\" shown=\"{}\" total_items=\"{}\" current=\"{}\" total=\"{}\"",
+                    shown, total_items, current_page, total_pages
+                ));
+            }
+            out.push_str(">\n");
             for row in rows {
                 out.push_str("    <row>\n");
                 for cell in row {
@@ -207,6 +308,7 @@ mod tests {
             elements,
             element_refs: Default::default(),
             full_texts: Default::default(),
+            full_blocks: Default::default(),
         }
     }
 
@@ -229,6 +331,15 @@ mod tests {
                 placeholder: Some("message".into()),
                 disabled: false,
             },
+            Element::List {
+                id: Some("b1".into()),
+                items: vec!["One".into(), "Two".into()],
+                truncated: true,
+                shown: 2,
+                total_items: 25,
+                current_page: 1,
+                total_pages: 2,
+            },
         ]));
 
         assert!(xml.contains("<page url=\"https://example.com\" title=\"Example\" current=\"1\""));
@@ -236,5 +347,22 @@ mod tests {
         assert!(xml.contains("<link id=\"e1\" href=\"/login\">Sign In</link>"));
         assert!(xml.contains("<checkbox id=\"e2\" checked=\"true\">Remember me</checkbox>"));
         assert!(xml.contains("<textarea id=\"e3\" placeholder=\"message\">hello</textarea>"));
+        assert!(xml.contains("<list id=\"b1\" truncated=\"true\" shown=\"2\" total_items=\"25\" current=\"1\" total=\"2\">"));
+    }
+
+    #[test]
+    fn render_block_xml_supports_list_blocks() {
+        let xml = render_block_xml(&BlockData::List {
+            id: "b1".into(),
+            items: vec!["First".into(), "Second".into()],
+            truncated: true,
+            shown: 2,
+            total_items: 35,
+            current_page: 2,
+            total_pages: 18,
+        });
+
+        assert!(xml.contains("<block id=\"b1\" kind=\"list\" current=\"2\" total=\"18\""));
+        assert!(xml.contains("<item>First</item>"));
     }
 }

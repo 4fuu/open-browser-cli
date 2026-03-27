@@ -1,4 +1,4 @@
-use crate::page::structure::{PageData, SearchResults};
+use crate::page::structure::{BlockData, PageData, SearchResults};
 use crate::protocol::messages::Response;
 
 pub fn format_page(page: &PageData, json: bool) -> String {
@@ -6,6 +6,14 @@ pub fn format_page(page: &PageData, json: bool) -> String {
         serde_json::to_string_pretty(page).unwrap()
     } else {
         crate::page::xml::render_xml(page)
+    }
+}
+
+pub fn format_block(block: &BlockData, json: bool) -> String {
+    if json {
+        serde_json::to_string_pretty(block).unwrap()
+    } else {
+        crate::page::xml::render_block_xml(block)
     }
 }
 
@@ -157,6 +165,7 @@ mod tests {
             ],
             element_refs: Default::default(),
             full_texts: Default::default(),
+            full_blocks: Default::default(),
         }
     }
 

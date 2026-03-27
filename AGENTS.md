@@ -245,6 +245,9 @@ browser-cli relay
 browser-cli open <url> [--json]
     打开网页，创建会话；默认输出人类可读结果，`--json` 返回结构化结果
 
+browser-cli --version
+    显示构建时注入的版本号；若构建时未提供环境变量，则显示 `unknown`
+
 browser-cli list [--json]
     列出所有活跃会话；`--json` 返回结构化会话列表
 
@@ -269,6 +272,9 @@ browser-cli wait <session-id> [--selector <css>] [--timeout <ms>] [--json] [--pa
 
 browser-cli text <session-id> <text-id> [-p <page-num>] [--fresh] [--json]
     查看被截断的完整文本（text-id 为 t1, t2...）；`--fresh` 强制绕过缓存
+
+browser-cli block <session-id> <block-id> [--source-page <page-num>] [-p <block-page-num>] [--fresh] [--json]
+    查看被分页的长列表或表格块（block-id 为 b1, b2...）；`--source-page` 指定块 ID 来源页面，`-p/--page` 读取块内部的分页
 
 browser-cli plugin run <name> <session-id> [--json]
     手动执行指定插件规则；`--json` 返回执行摘要
@@ -413,8 +419,8 @@ Relay 和 CLI 无需修改。扩展差异：
 | `<textarea>` | `<textarea>` | placeholder, disabled |
 | `<h1>`-`<h6>` | `<heading level="N">` | — |
 | 纯文本节点 | `<text>` | id（仅截断时分配）|
-| `<ul>`/`<ol>` | `<list><item>...</item></list>` | — |
-| `<table>` | `<table><row><cell>` | — |
+| `<ul>`/`<ol>` | `<list><item>...</item></list>` | id / truncated / shown / total_items / current / total（仅长列表分页时） |
+| `<table>` | `<table><row><cell>` | id / truncated / shown / total_items / current / total（仅长表格分页时） |
 
 **属性保留策略**：只保留功能性属性（href/type/value/placeholder/disabled/checked/selected/name），
 丢弃 class/style/data-*/原始 DOM id 等表现性属性。
@@ -424,12 +430,12 @@ Relay 和 CLI 无需修改。扩展差异：
 ```xml
 <page url="https://example.com" title="Example" current="1" total="3">
   <heading level="1">Welcome</heading>
-  <text id="t1">This is the beginning of a long article...</text>
+  <text id="t1">This is the beginning of a long article[...truncated]</text>
   <link id="e1" href="/login">Sign In</link>
   <button id="e2">Get Started</button>
   <input id="e3" type="text" placeholder="Search..."/>
   <checkbox id="e4" checked/>
-  <list>
+  <list id="b1" truncated="true" shown="20" total_items="42" current="1" total="3">
     <item>Item one</item>
     <item>Item two</item>
   </list>
@@ -446,6 +452,7 @@ Relay 和 CLI 无需修改。扩展差异：
 
 - 交互元素：`e1`, `e2`, ... — 每次 `get_page` 从 e1 重新编号
 - 文本节点（超过 200 字符时截断）：`t1`, `t2`, ... — 同样每次重新编号
+- 长列表/表格块（超过单块上限时分页）：`b1`, `b2`, ... — 每次 `get_page` 从 b1 重新编号，用 `block` 命令继续读取
 - 未截断的短文本不分配 id
 
 ### 分页策略
@@ -460,6 +467,12 @@ Relay 和 CLI 无需修改。扩展差异：
 
 单页最多输出 **200** 个元素。超过时优先保留交互元素，再填充文本节点。
 输出标注 `truncated="true" shown="200" total="347"`。
+
+### 块级分页
+
+- 长文本超过 200 字符时会在页面中显示为 `[...,truncated]`，并分配 `tN`
+- 长 `list` / `table` 超过单块上限时，会先输出首个块分页并分配 `bN`
+- 后续分页通过 `browser-cli block <session-id> <block-id> --source-page <page-num> -p <block-page-num>` 读取
 
 ### 复杂 DOM 处理
 
