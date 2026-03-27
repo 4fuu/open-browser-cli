@@ -12,19 +12,30 @@ const CHROME_EXTENSION_PLACEHOLDER: &str = "REPLACE_WITH_EXTENSION_ID";
 const FIREFOX_EXTENSION_PLACEHOLDER: &str = "replace-with-extension-id@example";
 
 pub async fn open(url: &str) -> Result<()> {
-    let resp = send_ok(Request::new(actions::OPEN, json!({ "url": url }))).await?;
-    let data = resp.data.unwrap_or_default();
+    let data = send_ok(Request::new(actions::OPEN, json!({ "url": url }))).await?;
     let session_id = data
         .get("session_id")
         .and_then(|v| v.as_str())
         .unwrap_or("unknown");
     let opened_url = data.get("url").and_then(|v| v.as_str()).unwrap_or(url);
     println!("Session {session_id} opened: {opened_url}");
+
+    let matching = crate::plugin::loader::find_matching_plugins(opened_url)?;
+    for plugin in matching {
+        if plugin.trigger == "on_load" {
+            eprintln!("Running plugin: {}", plugin.name);
+            crate::plugin::runner::run_plugin(&plugin, session_id).await?;
+        }
+    }
+
     Ok(())
 }
 
-pub fn setup(browser: &str, extension_id: Option<&str>) -> Result<()> {
-    let manifest_path = native_host_manifest_path(browser)?;
+pub fn setup(browser: &str, extension_id: Option<&str>, manifest_path: Option<&Path>) -> Result<()> {
+    let manifest_path = match manifest_path {
+        Some(p) => p.to_path_buf(),
+        None => native_host_manifest_path(browser)?,
+    };
     let relay_path = std::env::current_exe()?.canonicalize()?;
     let manifest = build_native_host_manifest(browser, &relay_path, extension_id);
 
@@ -32,6 +43,9 @@ pub fn setup(browser: &str, extension_id: Option<&str>) -> Result<()> {
         fs::create_dir_all(parent)?;
     }
     fs::write(&manifest_path, serde_json::to_string_pretty(&manifest)?)?;
+
+    #[cfg(target_os = "windows")]
+    write_windows_registry(browser, &manifest_path)?;
 
     println!("Wrote native host manifest: {}", manifest_path.display());
     if extension_id.is_none() {
@@ -50,12 +64,10 @@ pub async fn close(session_id: Option<&str>, close_all: bool) -> Result<()> {
         json!({ "session_id": session_id })
     };
 
-    let resp = send_ok(Request::new(actions::CLOSE, params)).await?;
+    let data = send_ok(Request::new(actions::CLOSE, params)).await?;
     if close_all {
-        let closed = resp
-            .data
-            .as_ref()
-            .and_then(|data| data.get("closed"))
+        let closed = data
+            .get("closed")
             .and_then(|value| value.as_u64())
             .unwrap_or(0);
         println!("Closed {closed} session(s).");
@@ -66,8 +78,7 @@ pub async fn close(session_id: Option<&str>, close_all: bool) -> Result<()> {
 }
 
 pub async fn list() -> Result<()> {
-    let resp = send_ok(Request::new(actions::LIST, json!({}))).await?;
-    let data = resp.data.unwrap_or_default();
+    let data = send_ok(Request::new(actions::LIST, json!({}))).await?;
     let sessions = data.get("sessions").unwrap_or(&data);
     println!("{}", crate::cli::output::format_session_list(sessions));
     Ok(())
@@ -163,8 +174,8 @@ pub async fn wait(session_id: &str, selector: Option<&str>, timeout: Option<u64>
 
     if let Some(selector) = selector {
         println!("Selector became available: {selector}");
-    } else if let Some(data) = resp.data {
-        println!("{}", crate::cli::output::format_response(&Response::success("wait".into(), data), false));
+    } else if !resp.is_null() {
+        println!("{}", crate::cli::output::format_response(&Response::success("wait".into(), resp), false));
     } else {
         println!("Page reached a stable state.");
     }
@@ -219,10 +230,7 @@ pub fn plugin_list() -> Result<()> {
 }
 
 async fn fetch_snapshot(session_id: &str, action: &str) -> Result<crate::protocol::messages::RawSnapshot> {
-    let response = send_ok(Request::new(action, json!({ "session_id": session_id }))).await?;
-    let data = response
-        .data
-        .ok_or_else(|| anyhow::anyhow!("missing snapshot payload"))?;
+    let data = send_ok(Request::new(action, json!({ "session_id": session_id }))).await?;
     parse_snapshot(&data)
 }
 
@@ -235,25 +243,54 @@ async fn resolve_page(
     parse_page_from_snapshot(&snapshot, page_num)
 }
 
-async fn send_ok(req: Request) -> Result<Response> {
-    let resp = send_request(&req).await?;
-    if resp.ok {
-        Ok(resp)
-    } else {
-        bail!("{}", resp.error.unwrap_or_else(|| "Unknown error".into()))
-    }
+async fn send_ok(req: Request) -> Result<serde_json::Value> {
+    send_request(&req).await?.into_result()
+}
+
+#[cfg(target_os = "windows")]
+fn write_windows_registry(browser: &str, manifest_path: &Path) -> Result<()> {
+    use winreg::enums::{HKEY_CURRENT_USER, KEY_WRITE};
+    use winreg::RegKey;
+
+    let reg_path = match browser {
+        "chrome" => r"Software\Google\Chrome\NativeMessagingHosts\com.browser_cli.relay",
+        "firefox" => r"Software\Mozilla\NativeMessagingHosts\com.browser_cli.relay",
+        _ => return Ok(()),
+    };
+
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    let (key, _) = hkcu.create_subkey_with_flags(reg_path, KEY_WRITE)?;
+    key.set_value("", &manifest_path.to_string_lossy().as_ref())?;
+    println!("Wrote registry key: HKCU\\{reg_path}");
+    Ok(())
 }
 
 fn native_host_manifest_path(browser: &str) -> Result<PathBuf> {
-    let home = std::env::var("HOME").map(PathBuf::from)?;
-    match browser {
-        "chrome" => Ok(home.join(
-            ".config/google-chrome/NativeMessagingHosts/com.browser_cli.relay.json",
-        )),
-        "firefox" => Ok(home.join(
-            ".mozilla/native-messaging-hosts/com.browser_cli.relay.json",
-        )),
-        other => bail!("unsupported browser: {other}"),
+    #[cfg(target_os = "windows")]
+    {
+        let appdata = std::env::var("APPDATA").map(PathBuf::from)?;
+        match browser {
+            "chrome" => Ok(appdata.join(
+                r"Google\Chrome\NativeMessagingHosts\com.browser_cli.relay.json",
+            )),
+            "firefox" => Ok(appdata.join(
+                r"Mozilla\NativeMessagingHosts\com.browser_cli.relay.json",
+            )),
+            other => bail!("unsupported browser: {other}"),
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let home = std::env::var("HOME").map(PathBuf::from)?;
+        match browser {
+            "chrome" => Ok(home.join(
+                ".config/google-chrome/NativeMessagingHosts/com.browser_cli.relay.json",
+            )),
+            "firefox" => Ok(home.join(
+                ".mozilla/native-messaging-hosts/com.browser_cli.relay.json",
+            )),
+            other => bail!("unsupported browser: {other}"),
+        }
     }
 }
 

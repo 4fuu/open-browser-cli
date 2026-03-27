@@ -6,6 +6,7 @@ mod relay;
 mod transport;
 
 use clap::{Parser, Subcommand, ValueEnum};
+use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(name = "browser-cli", about = "Browser session CLI with Native Messaging relay")]
@@ -32,6 +33,9 @@ enum Command {
         /// Browser extension ID. If omitted, a placeholder is written.
         #[arg(long)]
         extension_id: Option<String>,
+        /// Override the manifest file path instead of using the default location.
+        #[arg(long)]
+        manifest_path: Option<PathBuf>,
     },
     /// Open a URL in the browser
     Open {
@@ -150,12 +154,13 @@ async fn main() -> anyhow::Result<()> {
         Command::Setup {
             browser,
             ref extension_id,
+            ref manifest_path,
         } => {
             let browser = match browser {
                 BrowserKind::Chrome => "chrome",
                 BrowserKind::Firefox => "firefox",
             };
-            cli::commands::setup(browser, extension_id.as_deref())?
+            cli::commands::setup(browser, extension_id.as_deref(), manifest_path.as_deref())?
         }
         Command::Open { ref url } => cli::commands::open(url).await?,
         Command::Close {

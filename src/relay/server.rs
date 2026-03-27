@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
 use tokio::sync::{Mutex, oneshot};
@@ -113,9 +113,14 @@ async fn handle_client(
             native_msg::write_message(&mut *out, &payload).await?;
         }
 
-        let extension_response = rx
-            .await
-            .context("native response channel closed before reply arrived")?;
+        let extension_response = match rx.await {
+            Ok(resp) => resp,
+            Err(_) => {
+                let err = Response::error(request.id, "native response channel closed");
+                write_response(&mut writer, &err).await?;
+                continue;
+            }
+        };
 
         let response = finalize_response(request, extension_response, &sessions).await?;
         write_response(&mut writer, &response).await?;
@@ -176,7 +181,7 @@ async fn finalize_response(
     extension_response: Response,
     sessions: &SessionMap,
 ) -> Result<Response> {
-    if !extension_response.ok {
+    if !extension_response.is_success() {
         return Ok(extension_response);
     }
 
