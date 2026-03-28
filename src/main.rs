@@ -276,6 +276,23 @@ enum Command {
         #[arg(long, short = 'v')]
         verbose: bool,
     },
+    /// Capture screenshot of the current page
+    Screenshot {
+        /// Session ID
+        session_id: String,
+        /// Output file path (default: screenshot-<timestamp>.png)
+        #[arg(short, long)]
+        output: Option<String>,
+        /// Capture full page instead of just the viewport
+        #[arg(long)]
+        full_page: bool,
+        /// Image quality for JPEG (0-100, default: PNG format)
+        #[arg(long, value_parser = clap::value_parser!(u32).range(0..=100))]
+        quality: Option<u32>,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
     /// Manage and run plugins
     Plugin {
         #[command(subcommand)]
@@ -465,6 +482,13 @@ async fn main() -> anyhow::Result<()> {
             json,
             verbose,
         } => cli::commands::view(session_id, target, page, fresh, json, verbose).await?,
+        Command::Screenshot {
+            ref session_id,
+            ref output,
+            full_page,
+            quality,
+            json,
+        } => cli::commands::screenshot(session_id, output.as_deref(), full_page, quality, json).await?,
         Command::Plugin { ref cmd } => match cmd {
             PluginCommand::Run {
                 name,

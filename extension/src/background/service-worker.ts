@@ -85,6 +85,8 @@ async function handleRequest(req: Request): Promise<Response> {
       case 'type':
       case 'wait':
         return await forwardToContent(req);
+      case 'screenshot':
+        return await handleScreenshot(req);
       default:
         return { id: req.id, ok: false, error: `Unknown action: ${req.action}` };
     }
@@ -292,6 +294,51 @@ async function forwardToContent(req: Request): Promise<Response> {
     id: req.id,
     ok: true,
     data: result.data,
+  };
+}
+
+async function handleScreenshot(req: Request): Promise<Response> {
+  const session = sessionFromRequest(req);
+  if (!session.ok) {
+    return { id: req.id, ok: false, error: session.error };
+  }
+
+  await ensureTabLoaded(session.value.tab_id);
+
+  const quality = typeof req.params.quality === 'number' ? req.params.quality : undefined;
+  const format: 'png' | 'jpeg' = quality !== undefined ? 'jpeg' : 'png';
+  const options: Parameters<typeof chrome.tabs.captureVisibleTab>[1] = { format };
+  if (quality !== undefined) {
+    options.quality = quality;
+  }
+
+  // Get the window ID for the session's tab
+  const tab = await chrome.tabs.get(session.value.tab_id);
+  if (!tab.windowId) {
+    return { id: req.id, ok: false, error: 'Could not determine window for tab' };
+  }
+
+  // Record the currently active tab so we can restore focus after capture
+  const [previousTab] = await chrome.tabs.query({ active: true, windowId: tab.windowId });
+
+  // Ensure the tab is active in its window before capturing
+  await chrome.tabs.update(session.value.tab_id, { active: true });
+
+  const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, options);
+  const base64Data = dataUrl.split(',')[1];
+
+  // Restore previously active tab if it was different
+  if (previousTab && previousTab.id !== undefined && previousTab.id !== tab.id) {
+    await chrome.tabs.update(previousTab.id, { active: true });
+  }
+
+  return {
+    id: req.id,
+    ok: true,
+    data: {
+      image: base64Data,
+      format: format,
+    },
   };
 }
 
