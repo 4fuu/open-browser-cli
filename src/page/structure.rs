@@ -2240,4 +2240,93 @@ mod tests {
             other => panic!("unexpected: {other:?}"),
         }
     }
+
+    #[test]
+    fn audio_with_media_state_becomes_media_node() {
+        let body = node("r1", None, "body", "", 0.0);
+        let mut audio = node("r2", Some("r1"), "audio", "", 10.0);
+        audio.attrs.insert("media-state".into(), "playing".into());
+        audio
+            .attrs
+            .insert("media-current-time".into(), "30".into());
+        audio.attrs.insert("media-duration".into(), "180".into());
+        audio.attrs.insert("media-muted".into(), "true".into());
+
+        let page = parse_page_from_snapshot(&snapshot(vec![body, audio]), Some(1)).unwrap();
+        match &page.nodes[0] {
+            Node::Media {
+                id,
+                tag,
+                media_state,
+                current_time,
+                duration,
+                muted,
+                resolution,
+            } => {
+                assert_eq!(id, "e1");
+                assert_eq!(tag, "audio");
+                assert_eq!(media_state, "playing");
+                assert_eq!(*current_time, 30);
+                assert_eq!(*duration, Some(180));
+                assert!(*muted);
+                assert!(resolution.is_none());
+            }
+            other => panic!("expected Media, got: {other:?}"),
+        }
+        assert_eq!(page.element_refs.get("e1").map(String::as_str), Some("r2"));
+    }
+
+    #[test]
+    fn video_with_all_media_attrs_becomes_media_node() {
+        let body = node("r1", None, "body", "", 0.0);
+        let mut video = node("r2", Some("r1"), "video", "", 10.0);
+        video.attrs.insert("media-state".into(), "playing".into());
+        video
+            .attrs
+            .insert("media-current-time".into(), "42".into());
+        video.attrs.insert("media-duration".into(), "120".into());
+        video.attrs.insert("media-muted".into(), "false".into());
+        video
+            .attrs
+            .insert("media-resolution".into(), "1920x1080".into());
+
+        let page = parse_page_from_snapshot(&snapshot(vec![body, video]), Some(1)).unwrap();
+        match &page.nodes[0] {
+            Node::Media {
+                id,
+                tag,
+                media_state,
+                current_time,
+                duration,
+                muted,
+                resolution,
+            } => {
+                assert_eq!(id, "e1");
+                assert_eq!(tag, "video");
+                assert_eq!(media_state, "playing");
+                assert_eq!(*current_time, 42);
+                assert_eq!(*duration, Some(120));
+                assert!(!*muted);
+                assert_eq!(resolution.as_deref(), Some("1920x1080"));
+            }
+            other => panic!("expected Media, got: {other:?}"),
+        }
+        assert_eq!(page.element_refs.get("e1").map(String::as_str), Some("r2"));
+    }
+
+    #[test]
+    fn video_without_media_state_is_not_media_node() {
+        let body = node("r1", None, "body", "", 0.0);
+        let video = node("r2", Some("r1"), "video", "Some video text", 10.0);
+
+        let page = parse_page_from_snapshot(&snapshot(vec![body, video]), Some(1)).unwrap();
+        // Without media-state attr, the video element should fall through
+        // to normal node handling (e.g. Text or Container), not Media.
+        for n in &page.nodes {
+            assert!(
+                !matches!(n, Node::Media { .. }),
+                "video without media-state should not produce Media node"
+            );
+        }
+    }
 }

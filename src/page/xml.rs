@@ -1186,4 +1186,41 @@ mod tests {
         assert!(xml.contains("class=\"type-a\""));
         assert!(xml.contains("class=\"type-b\""));
     }
+
+    #[test]
+    fn render_xml_media_node_with_all_fields() {
+        let xml = render_xml(&page(vec![Node::Media {
+            id: "e1".into(),
+            tag: "video".into(),
+            media_state: "playing".into(),
+            current_time: 42,
+            duration: Some(120),
+            muted: true,
+            resolution: Some("1920x1080".into()),
+        }]));
+
+        assert!(xml.contains(
+            "<media id=\"e1\" tag=\"video\" state=\"playing\" time=\"42\" duration=\"120\" muted=\"true\" resolution=\"1920x1080\"/>"
+        ));
+    }
+
+    #[test]
+    fn render_xml_media_node_minimal_fields() {
+        let xml = render_xml(&page(vec![Node::Media {
+            id: "e2".into(),
+            tag: "audio".into(),
+            media_state: "paused".into(),
+            current_time: 0,
+            duration: None,
+            muted: false,
+            resolution: None,
+        }]));
+
+        assert!(xml.contains(
+            "<media id=\"e2\" tag=\"audio\" state=\"paused\" time=\"0\"/>"
+        ));
+        assert!(!xml.contains("duration="));
+        assert!(!xml.contains("muted="));
+        assert!(!xml.contains("resolution="));
+    }
 }
