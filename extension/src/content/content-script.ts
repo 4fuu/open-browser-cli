@@ -456,6 +456,8 @@ async function handleMessage(req: ContentRequest): Promise<ContentResponse> {
         return handlePresenceStart(req);
       case 'presence_stop':
         return handlePresenceStop(req);
+      case 'resolve_url':
+        return handleResolveUrl(req);
       default:
         return {
           ok: false,
@@ -492,6 +494,32 @@ function handlePresenceStop(req: ContentRequest): ContentResponse {
       cursor: 'stopped',
     },
   };
+}
+
+function handleResolveUrl(req: ContentRequest): ContentResponse {
+  const refId = requireString(req.params.ref, 'ref');
+  const target = resolveTarget(refId);
+  if (!target) {
+    return { ok: false, error: `Element not found: ${refId}` };
+  }
+
+  const url =
+    target.getAttribute('src') ??
+    target.getAttribute('href') ??
+    (target as HTMLObjectElement).data ??
+    null;
+
+  if (!url) {
+    return { ok: false, error: `Element ${refId} has no src or href attribute` };
+  }
+
+  // Resolve to absolute URL using the page's base URL
+  try {
+    const absolute = new URL(url, document.baseURI).href;
+    return { ok: true, data: { url: absolute } };
+  } catch {
+    return { ok: false, error: `Invalid URL: ${url}` };
+  }
 }
 
 async function handleSnapshot(req: ContentRequest): Promise<ContentResponse> {

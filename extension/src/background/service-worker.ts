@@ -87,6 +87,8 @@ async function handleRequest(req: Request): Promise<Response> {
         return await forwardToContent(req);
       case 'screenshot':
         return await handleScreenshot(req);
+      case 'download':
+        return await handleDownload(req);
       default:
         return { id: req.id, ok: false, error: `Unknown action: ${req.action}` };
     }
@@ -340,6 +342,119 @@ async function handleScreenshot(req: Request): Promise<Response> {
       format: format,
     },
   };
+}
+
+async function handleDownload(req: Request): Promise<Response> {
+  const session = sessionFromRequest(req);
+  if (!session.ok) {
+    return { id: req.id, ok: false, error: session.error };
+  }
+
+  const target = req.params.target;
+  if (typeof target !== 'string' || target.length === 0) {
+    return { id: req.id, ok: false, error: 'target is required' };
+  }
+
+  let url: string;
+
+  // Check if target looks like a URL (contains :// or starts with //)
+  if (/^https?:\/\//.test(target) || target.startsWith('//')) {
+    url = target.startsWith('//') ? `https:${target}` : target;
+  } else {
+    // Treat as element ref — resolve via content script
+    const result = await sendToContent(session.value.tab_id, {
+      type: 'resolve_url',
+      params: {
+        session_id: session.value.session_id,
+        request_id: req.id,
+        ref: target,
+      },
+    });
+    if (!result.ok || !result.data?.url) {
+      return {
+        id: req.id,
+        ok: false,
+        error: result.error ?? `Could not resolve URL for target: ${target}`,
+      };
+    }
+    url = result.data.url as string;
+  }
+
+  try {
+    const response = await fetch(url, { credentials: 'include' });
+    if (!response.ok) {
+      return {
+        id: req.id,
+        ok: false,
+        error: `Download failed: HTTP ${response.status} ${response.statusText}`,
+      };
+    }
+
+    const contentType = response.headers.get('content-type') ?? 'application/octet-stream';
+    const buffer = await response.arrayBuffer();
+    const size = buffer.byteLength;
+
+    // Extract filename from Content-Disposition or URL
+    let filename = 'download';
+    const disposition = response.headers.get('content-disposition');
+    if (disposition) {
+      const match = /filename\*?=(?:UTF-8''|"?)([^";]+)"?/i.exec(disposition);
+      if (match?.[1]) {
+        filename = decodeURIComponent(match[1]);
+      }
+    } else {
+      try {
+        const urlPath = new URL(url).pathname;
+        const lastSegment = urlPath.split('/').filter(Boolean).pop();
+        if (lastSegment && lastSegment.includes('.')) {
+          filename = decodeURIComponent(lastSegment);
+        }
+      } catch {
+        // keep default
+      }
+    }
+
+    // Stream base64 data as download_chunk messages through the native port
+    // to stay under Chrome's native messaging size limits.
+    const bytes = new Uint8Array(buffer);
+    const CHUNK_SIZE = 3 * 1024 * 1024; // 3MB raw -> ~4MB base64, safe under limits
+    const totalChunks = Math.max(1, Math.ceil(bytes.length / CHUNK_SIZE));
+
+    for (let i = 0; i < totalChunks; i++) {
+      const start = i * CHUNK_SIZE;
+      const slice = bytes.subarray(start, Math.min(start + CHUNK_SIZE, bytes.length));
+
+      // Encode slice to base64 in sub-chunks to avoid call stack limits
+      let binary = '';
+      for (let j = 0; j < slice.length; j += 8192) {
+        const sub = slice.subarray(j, Math.min(j + 8192, slice.length));
+        binary += String.fromCharCode(...sub);
+      }
+      const chunkData = btoa(binary);
+
+      port?.postMessage({
+        type: 'download_chunk',
+        session_id: session.value.session_id,
+        request_id: req.id,
+        chunk_index: i,
+        data: chunkData,
+        done: i === totalChunks - 1,
+        ...(i === 0 ? { filename, content_type: contentType, size } : {}),
+      });
+    }
+
+    return {
+      id: req.id,
+      ok: true,
+      data: { streamed: true, filename, content_type: contentType, size },
+    };
+  } catch (error) {
+    return {
+      id: req.id,
+      ok: false,
+      error: `Download failed: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
 }
 
 function sessionFromRequest(
@@ -618,7 +733,7 @@ function isChunkEvent(message: unknown): message is ChunkEvent {
     return false;
   }
   const value = message as { type?: unknown; chunk?: unknown };
-  return value.type === 'page_chunk' && typeof value.chunk === 'object';
+  return (value.type === 'page_chunk' || value.type === 'download_chunk') && typeof value.chunk === 'object';
 }
 
 chrome.tabs.onRemoved.addListener((tabId) => {

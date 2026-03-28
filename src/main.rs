@@ -293,6 +293,19 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Download a browser-accessible resource to a local file
+    Download {
+        /// Session ID
+        session_id: String,
+        /// Target element ID (e.g. e3) or URL
+        target: String,
+        /// Output file path (default: auto-detect from URL/content-type)
+        #[arg(short, long)]
+        output: Option<String>,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
     /// Manage and run plugins
     Plugin {
         #[command(subcommand)]
@@ -489,6 +502,12 @@ async fn main() -> anyhow::Result<()> {
             quality,
             json,
         } => cli::commands::screenshot(session_id, output.as_deref(), full_page, quality, json).await?,
+        Command::Download {
+            ref session_id,
+            ref target,
+            ref output,
+            json,
+        } => cli::commands::download(session_id, target, output.as_deref(), json).await?,
         Command::Plugin { ref cmd } => match cmd {
             PluginCommand::Run {
                 name,
