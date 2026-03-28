@@ -95,34 +95,44 @@ browser-cli teardown --browser chrome   # 或 --browser firefox
 ### 基本流程
 
 ```bash
-# 打开网页，返回 session-id
+# 打开网页，创建会话并直接返回当前页面
 browser-cli open https://example.com
-# → Session s1234567890 opened: https://example.com
 
-# 也可以直接拿结构化结果
+# 只看会话信息，不附带页面内容
+browser-cli open https://example.com --quiet
+
+# 也可以直接拿结构化结果；必要时可调整打开后的稳定等待时间
 browser-cli open https://example.com --json
+browser-cli open https://example.com --wait 5000
 
 # 查看页面结构
 browser-cli page s1234567890
 
-# 点击元素（e1 为页面输出中的元素 ID）
+# 点击元素；目标既可以是数字 ID，也可以是页面上的文本查询
 browser-cli click s1234567890 1
+browser-cli click s1234567890 "Sign In"
 
-# 自动化场景中可只返回成功摘要，或显式附带更新后的页面
+# 自动化场景中可只返回成功摘要
 browser-cli click s1234567890 1 --quiet
-browser-cli click s1234567890 1 --json --page-after
+browser-cli click s1234567890 1 --json
 
 # 如果目标是链接，也可以新开一个会话访问，保持原页面不变
 browser-cli click s1234567890 1 --new-session
 
-# 向输入框输入文本
+# 向输入框输入文本；同样支持数字 ID 或文本查询
 browser-cli type s1234567890 3 "hello world"
+browser-cli type s1234567890 "Search" "hello world"
 
 # search 结果会直接给出 page 和可操作的 element_id
 browser-cli search s1234567890 "search" --json
 
-# wait 可返回结构化结果，必要时显式附带等待后的页面
-browser-cli wait s1234567890 --selector "#app" --json --page-after
+# wait 默认等待页面稳定；也可以等待指定文本出现
+browser-cli wait s1234567890 --timeout 5000
+browser-cli wait s1234567890 --for "Continue" --json
+
+# 查看单个元素/长文本/长列表块的聚焦视图
+browser-cli view s1234567890 e3
+browser-cli view s1234567890 "pricing"
 
 # 关闭会话
 browser-cli close s1234567890
@@ -131,19 +141,20 @@ browser-cli close s1234567890
 ### 命令速查
 
 ```
-browser-cli open <url> [--json]
+browser-cli open <url> [--wait <毫秒>] [--quiet] [--json]
 browser-cli list [--json]
 browser-cli close <session-id> [--json]
 browser-cli close --all [--json]
 browser-cli --version
 
 browser-cli page <session-id> [-p <页码>] [--next] [--prev] [--fresh] [--json]
-browser-cli click <session-id> <元素ID> [-p <页码>] [--new-session] [--fresh] [--quiet] [--json] [--page-after]
-browser-cli type <session-id> <元素ID> <文本> [-p <页码>] [--fresh] [--quiet] [--json] [--page-after]
+browser-cli click <session-id> <目标> [-p <页码>] [--new-session] [--fresh] [--quiet] [--json]
+browser-cli type <session-id> <目标> <文本> [-p <页码>] [--fresh] [--quiet] [--json]
 browser-cli search <session-id> <关键词> [--fresh] [--json]
 browser-cli text <session-id> <文本ID> [-p <页码>] [--fresh] [--json]
-browser-cli block <session-id> <块ID> [--source-page <页码>] [-p <块页码>] [--fresh] [--json]
-browser-cli wait <session-id> [--selector <CSS选择器>] [--timeout <毫秒>] [--json] [--page-after]
+browser-cli block <session-id> <块ID> [--source-page <页码>] [(-p <块页码>)|--all] [--fresh] [--json]
+browser-cli view <session-id> <目标> [-p <页码>] [--fresh] [--json]
+browser-cli wait <session-id> [--for <文本>] [--timeout <毫秒>] [--quiet] [--json]
 
 browser-cli plugin list [--json]
 browser-cli plugin run <名称> <session-id> [--json]
@@ -175,11 +186,15 @@ browser-cli teardown [--browser chrome|firefox]
 - `--next` / `--prev` 按当前滚动位置相对翻页
 - `--fresh` 跳过缓存，强制从浏览器获取最新快照
 - `--version` 显示构建时注入的版本号；若未注入则显示 `unknown`
-- `open` / `close` / `list` / `search` / `wait` / `plugin` 全部支持 `--json`
-- `click` / `type` 默认仍输出整页 XML；可用 `--quiet` 只看成功结果，用 `--json` 获取结构化摘要，用 `--page-after` 在结构化返回中显式附带最新页面
+- `open` 默认会在创建会话后直接输出当前页；用 `--quiet` 只看会话信息，用 `--wait 0` 可跳过打开后的稳定等待
+- `open` / `close` / `list` / `search` / `wait` / `plugin` / `view` 全部支持 `--json`
+- `click` / `type` 的 `<目标>` 既可以是数字 ID（如 `1` 对应 `e1`），也可以是当前页交互元素的文本查询；查询会匹配按钮文本、链接文本、输入框 placeholder/value 等
+- `click` / `type` 默认会输出更新后的整页 XML；可用 `--quiet` 只看成功结果，用 `--json` 获取结构化摘要
+- `wait` 默认等待页面稳定并返回最新页面；`--for <文本>` 会轮询最新快照，直到页面里出现匹配该文本的元素
 - `search` 会返回 `page`、`tag`、上下文摘要，以及命中交互元素时的 `element_id`
 - 长文本截断会明确显示为 `[...truncated]`
-- 超长 `list` / `table` 会在页面中先显示首段，并带上块级分页属性；分页按渲染后的 XML 行数预算切分，而不是按条目数量硬切；可用 `browser-cli block <session-id> <块ID> --source-page <页码> -p <块页码>` 继续读取
+- 超长 `list` / `table` 会在页面中先显示首段，并带上块级分页属性；分页按渲染后的 XML 行数预算切分，而不是按条目数量硬切；可用 `browser-cli block <session-id> <块ID> --source-page <页码> -p <块页码>` 读取单页，或用 `--all` 一次展开整个块
+- `view` 会返回某个元素、长文本或长块的聚焦视图；目标支持 `e3` / `3` / `t1` / `b1` / 文本查询
 - `click --new-session` 仅对带 `href` 的链接生效；CLI 会把链接解析成绝对 URL，并直接创建一个新的 session，原页面保持不变
 
 ### 插件
@@ -205,8 +220,8 @@ action = "click"
 
 - Relay 监听固定端口 `127.0.0.1:12899`，同一时间只运行一个实例
 - 元素 ID（`e1`, `e2`, ...）每次 `page` 后重新编号，操作前需先获取当前页面
-- `page --fresh`、`search --fresh`、`text --fresh`，以及 `click` / `type` 的 `--fresh`，都用于动态页面需要绕过缓存的场景
-- `wait --page-after` 会在等待成功后再抓一次新页面，适合继续链式操作
+- `page --fresh`、`search --fresh`、`text --fresh`、`block --fresh`、`view --fresh`，以及 `click` / `type` 的 `--fresh`，都用于动态页面需要绕过缓存的场景
+- `wait` 默认就会在成功后返回最新页面；自动化链路里如果只需要成功/超时结果，用 `--quiet`
 - `click --new-session` 是显式行为，不会自动套用到普通点击；如果目标元素不是链接，命令会直接报错
 
 ---

@@ -190,7 +190,7 @@ Content Script 不向页面注入全局变量，不修改页面原始 DOM 结构
 
 | action | 触发者 | 参数 | 说明 |
 |--------|--------|------|------|
-| `open` | CLI | `{ url }` | 创建 tab，等待加载，发起首次快照 |
+| `open` | CLI | `{ url, wait_after_load? }` | 创建 tab，等待加载，并可额外等待 DOM 稳定后发起首次快照 |
 | `close` | CLI | `{ session_id }` 或 `{ all: true }` | 关闭 tab，清理缓存 |
 | `list` | CLI | — | 返回所有活跃会话列表 |
 | `get_page` | CLI | `{ session_id }` | Relay 优先走缓存；未命中则触发浏览器快照 |
@@ -198,7 +198,7 @@ Content Script 不向页面注入全局变量，不修改页面原始 DOM 结构
 | `get_text` | CLI | `{ session_id, text_id }` | Relay 返回缓存快照，CLI 取完整文本 |
 | `click` | CLI | `{ session_id, ref }` | 转发给 Content Script，执行后推送新快照 |
 | `type` | CLI | `{ session_id, ref, text }` | 同上 |
-| `wait` | CLI | `{ session_id, selector?, timeout? }` | 转发给 Content Script，等待页面稳定 |
+| `wait` | CLI | `{ session_id, timeout? }` | 转发给 Content Script，等待页面稳定；CLI 的 `--for <text>` 走本地轮询快照匹配 |
 
 补充：`click --new-session` 是 CLI 层的显式分支，不会修改协议。CLI 若发现目标元素是带 `href` 的链接，
 会直接把链接解析成绝对 URL 并走 `open` 创建新会话；只有普通 `click` 才会继续转发给浏览器当前 tab。
@@ -242,8 +242,8 @@ browser-cli setup [--browser chrome|firefox] [--extension-id <id>]
 browser-cli relay
     以 Relay 模式运行（由 Chrome 拉起，用户一般不直接调用）
 
-browser-cli open <url> [--json]
-    打开网页，创建会话；默认输出人类可读结果，`--json` 返回结构化结果
+browser-cli open <url> [--wait <ms>] [--quiet] [--json]
+    打开网页，创建会话；默认直接输出当前页面，`--wait` 控制打开后的稳定等待时长（默认 3000ms，0 表示跳过），`--quiet` 仅输出会话摘要，`--json` 返回结构化结果
 
 browser-cli --version
     显示构建时注入的版本号；若构建时未提供环境变量，则显示 `unknown`
@@ -258,23 +258,26 @@ browser-cli close --all [--json]
 browser-cli page <session-id> [-p <page-num>] [--next] [--prev] [--fresh] [--json]
     获取结构化页面内容（XML 或 JSON）；--next/--prev 相对当前滚动位置翻页，`--fresh` 强制绕过 Relay 缓存
 
-browser-cli click <session-id> <element-id> [-p <page-num>] [--new-session] [--fresh] [--quiet] [--json] [--page-after]
-    点击元素（element-id 为数字，如 1 对应 e1）；`--fresh` 先强制刷新快照再解析元素，`--quiet` 仅输出成功摘要，`--json` 返回结构化结果，`--page-after` 显式附带更新后的页面；若指定 --new-session 且目标为链接，则新开会话访问该 URL，保持原页面不变
+browser-cli click <session-id> <target> [-p <page-num>] [--new-session] [--fresh] [--quiet] [--json]
+    点击元素；`target` 既可以是数字元素 ID（如 1 对应 e1），也可以是当前页交互元素的文本查询；`--fresh` 先强制刷新快照再解析目标，`--quiet` 仅输出成功摘要，`--json` 返回结构化结果；默认会附带更新后的页面；若指定 `--new-session` 且目标为链接，则新开会话访问该 URL，保持原页面不变
 
-browser-cli type <session-id> <element-id> <text> [-p <page-num>] [--fresh] [--quiet] [--json] [--page-after]
-    向输入框输入文本；`--fresh` 先强制刷新快照再解析元素，`--quiet` 仅输出成功摘要，`--json` 返回结构化结果，`--page-after` 显式附带更新后的页面
+browser-cli type <session-id> <target> <text> [-p <page-num>] [--fresh] [--quiet] [--json]
+    向输入框输入文本；`target` 既可以是数字元素 ID，也可以是当前页交互元素的文本查询；`--fresh` 先强制刷新快照再解析目标，`--quiet` 仅输出成功摘要，`--json` 返回结构化结果；默认会附带更新后的页面
 
 browser-cli search <session-id> <query> [--fresh] [--json]
     在页面中检索文本和关键属性；结果包含 page、tag、context，以及命中交互元素时可直接操作的 element_id
 
-browser-cli wait <session-id> [--selector <css>] [--timeout <ms>] [--json] [--page-after]
-    等待页面稳定或元素出现；`--json` 返回结构化 wait 结果，`--page-after` 成功后显式附带最新页面
+browser-cli wait <session-id> [--for <text>] [--timeout <ms>] [--quiet] [--json]
+    等待页面稳定，或通过 `--for` 等待页面中出现匹配文本的元素；默认返回最新页面，`--quiet` 仅输出成功/超时摘要，`--json` 返回结构化 wait 结果
 
 browser-cli text <session-id> <text-id> [-p <page-num>] [--fresh] [--json]
     查看被截断的完整文本（text-id 为 t1, t2...）；`--fresh` 强制绕过缓存
 
-browser-cli block <session-id> <block-id> [--source-page <page-num>] [-p <block-page-num>] [--fresh] [--json]
-    查看被分页的长列表或表格块（block-id 为 b1, b2...）；`--source-page` 指定块 ID 来源页面，`-p/--page` 读取块内部的分页
+browser-cli block <session-id> <block-id> [--source-page <page-num>] [-p <block-page-num> | --all] [--fresh] [--json]
+    查看被分页的长列表或表格块（block-id 为 b1, b2...）；`--source-page` 指定块 ID 来源页面，`-p/--page` 读取块内部单页，`--all` 一次展开整个块
+
+browser-cli view <session-id> <target> [-p <page-num>] [--fresh] [--json]
+    查看单个元素、长文本或长块的聚焦视图；`target` 支持 `e3` / `3` / `t1` / `b1` / 文本查询
 
 browser-cli plugin run <name> <session-id> [--json]
     手动执行指定插件规则；`--json` 返回执行摘要
@@ -304,7 +307,7 @@ Firefox：`~/.mozilla/native-messaging-hosts/com.browser_cli.relay.json`（`allo
 CLI 在发送 `click`/`type` 前，先通过 `get_page` 获取快照并解析出 `element_refs` 映射表
 （`e1 → r3`, `e2 → r7`, ...）。
 
-- 普通 `click` / `type`：CLI 将对应的 `ref` 传给浏览器，浏览器 Content Script 用 `elementMap.get(refId)?.deref()` 取出 WeakRef 直接定位元素，无需 CSS 选择器。
+- 普通 `click` / `type`：若 `target` 是数字，则按 `eN → ref` 直接解析；否则 CLI 会在当前页交互元素中按文本、`href`、`placeholder`、`value` 等字段做首个匹配，再将对应 `ref` 传给浏览器。浏览器 Content Script 用 `elementMap.get(refId)?.deref()` 取出 WeakRef 直接定位元素，无需 CSS 选择器。
 - `click --new-session`：CLI 不把请求发给当前 tab，而是检查目标元素是否为带 `href` 的链接；若是，则按当前页面 URL 解析为绝对地址，再直接调用 `open` 新建一个 session。
 
 ---
@@ -473,7 +476,7 @@ Relay 和 CLI 无需修改。扩展差异：
 - 长文本超过 200 字符时会在页面中显示为 `[...,truncated]`，并分配 `tN`
 - 长 `list` / `table` 超过单块渲染行预算时，会先输出首个块分页并分配 `bN`
 - 表格中如果某个 `row` 只有一个 `cell`，且整行足够短，会压缩成单行 XML；太长时再展开为多行
-- 后续分页通过 `browser-cli block <session-id> <block-id> --source-page <page-num> -p <block-page-num>` 读取
+- 后续分页通过 `browser-cli block <session-id> <block-id> --source-page <page-num> -p <block-page-num>` 读取单页，也可用 `--all` 一次展开整个块
 
 ### 复杂 DOM 处理
 

@@ -6,7 +6,8 @@ use std::path::{Path, PathBuf};
 use url::Url;
 
 use crate::page::structure::{
-    Element, PageData, parse_page_from_snapshot, parse_snapshot, resolve_block, search_snapshot,
+    Node, PageData, parse_page_from_snapshot, parse_snapshot, resolve_block, resolve_block_all,
+    search_snapshot,
 };
 use crate::protocol::messages::{Request, Response, actions};
 use crate::transport::client::send_request;
@@ -31,9 +32,8 @@ struct ActionOutput {
 #[derive(Debug, Clone, Serialize)]
 struct WaitOutput {
     session_id: String,
-    selector: Option<String>,
-    selector_found: bool,
     timed_out: bool,
+    found: bool,
     page_updated: bool,
     waited_ms: Option<u64>,
     page: Option<PageData>,
@@ -44,24 +44,39 @@ pub struct ActionOptions {
     pub fresh: bool,
     pub json_mode: bool,
     pub quiet: bool,
-    pub page_after: bool,
 }
 
-pub async fn open(url: &str, json_mode: bool) -> Result<()> {
-    let (session_id, opened_url) = open_session(url).await?;
+pub async fn open(url: &str, wait_after_load: u64, quiet: bool, json_mode: bool) -> Result<()> {
+    let (session_id, opened_url) = open_session(url, wait_after_load).await?;
+
+    if quiet {
+        if json_mode {
+            print_json(&json!({
+                "session_id": session_id,
+                "url": opened_url,
+            }))?;
+        } else {
+            println!("Session {session_id} opened: {opened_url}");
+        }
+        return Ok(());
+    }
+
+    let page = resolve_page(&session_id, None, actions::GET_PAGE).await?;
     if json_mode {
         print_json(&json!({
             "session_id": session_id,
             "url": opened_url,
+            "page": page,
         }))?;
     } else {
-        println!("Session {session_id} opened: {opened_url}");
+        println!("Session {session_id} opened: {opened_url}\n");
+        println!("{}", crate::cli::output::format_page(&page, false));
     }
     Ok(())
 }
 
-async fn open_session(url: &str) -> Result<(String, String)> {
-    let data = send_ok(Request::new(actions::OPEN, json!({ "url": url }))).await?;
+async fn open_session(url: &str, wait_after_load: u64) -> Result<(String, String)> {
+    let data = send_ok(Request::new(actions::OPEN, json!({ "url": url, "wait_after_load": wait_after_load }))).await?;
     let session_id = data
         .get("session_id")
         .and_then(|v| v.as_str())
@@ -221,7 +236,7 @@ pub async fn page(
 
 pub async fn click(
     session_id: &str,
-    element_id: u32,
+    target: &str,
     page_num: Option<u32>,
     new_session: bool,
     options: ActionOptions,
@@ -236,19 +251,14 @@ pub async fn click(
         },
     )
     .await?;
-    let element_key = format!("e{element_id}");
-    let ref_id = page
-        .element_refs
-        .get(&element_key)
-        .cloned()
-        .ok_or_else(|| element_lookup_error(session_id, page_num, &element_key))?;
+    let (element_key, ref_id) = resolve_element_target(target, &page, session_id, page_num)?;
 
     if new_session {
-        let href = link_href_by_element_id(&page.elements, &element_key).ok_or_else(|| {
+        let href = link_href_by_element_id(&page.nodes, &element_key).ok_or_else(|| {
             anyhow::anyhow!("element is not a link or does not have an href: {element_key}")
         })?;
         let url = resolve_link_url(&page.url, href)?;
-        let (new_session_id, opened_url) = open_session(&url).await?;
+        let (new_session_id, opened_url) = open_session(&url, 3000).await?;
         if options.json_mode {
             print_json(&json!({
                 "action": "click_new_session",
@@ -277,7 +287,7 @@ pub async fn click(
         .get("changed")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
-    let should_fetch_page = options.page_after || (!options.json_mode && !options.quiet);
+    let should_fetch_page = !options.quiet;
     let updated = if should_fetch_page {
         Some(fetch_action_page(session_id, page_num, navigated).await?)
     } else {
@@ -314,11 +324,124 @@ pub async fn click(
     Ok(())
 }
 
-fn link_href_by_element_id<'a>(elements: &'a [Element], element_id: &str) -> Option<&'a str> {
-    elements.iter().find_map(|element| match element {
-        Element::Link { id, href, .. } if id == element_id => href.as_deref(),
-        _ => None,
-    })
+fn resolve_element_target(
+    target: &str,
+    page: &PageData,
+    session_id: &str,
+    page_num: Option<u32>,
+) -> Result<(String, String)> {
+    if let Ok(num) = target.parse::<u32>() {
+        let element_key = format!("e{num}");
+        let ref_id = page
+            .element_refs
+            .get(&element_key)
+            .cloned()
+            .ok_or_else(|| element_lookup_error(session_id, page_num, &element_key))?;
+        return Ok((element_key, ref_id));
+    }
+
+    let found = find_interactive_by_query(&page.nodes, target).ok_or_else(|| {
+        anyhow::anyhow!(
+            "no interactive element matching \"{target}\" found on the current page. \
+             Run `browser-cli page {session_id}` to see available elements."
+        )
+    })?;
+
+    let ref_id = page
+        .element_refs
+        .get(&found)
+        .cloned()
+        .ok_or_else(|| element_lookup_error(session_id, page_num, &found))?;
+
+    Ok((found, ref_id))
+}
+
+fn find_interactive_by_query(nodes: &[Node], query: &str) -> Option<String> {
+    let needle = query.to_lowercase();
+    find_interactive_recursive(nodes, &needle)
+}
+
+fn find_interactive_recursive(nodes: &[Node], needle: &str) -> Option<String> {
+    for node in nodes {
+        match node {
+            Node::Link { id, text, href, .. } => {
+                if text.to_lowercase().contains(needle)
+                    || href
+                        .as_deref()
+                        .unwrap_or("")
+                        .to_lowercase()
+                        .contains(needle)
+                {
+                    return Some(id.clone());
+                }
+            }
+            Node::Button { id, text, .. } => {
+                if text.to_lowercase().contains(needle) {
+                    return Some(id.clone());
+                }
+            }
+            Node::Input {
+                id,
+                placeholder,
+                value,
+                ..
+            } => {
+                if placeholder
+                    .as_deref()
+                    .unwrap_or("")
+                    .to_lowercase()
+                    .contains(needle)
+                    || value
+                        .as_deref()
+                        .unwrap_or("")
+                        .to_lowercase()
+                        .contains(needle)
+                {
+                    return Some(id.clone());
+                }
+            }
+            Node::Checkbox { id, text, .. }
+            | Node::Radio { id, text, .. }
+            | Node::Select { id, text, .. }
+            | Node::Textarea { id, text, .. } => {
+                if text.to_lowercase().contains(needle) {
+                    return Some(id.clone());
+                }
+            }
+            Node::Container { children, .. }
+            | Node::List { children, .. }
+            | Node::Item { children }
+            | Node::Table { children, .. }
+            | Node::Row { children }
+            | Node::Cell { children } => {
+                if let Some(found) = find_interactive_recursive(children, needle) {
+                    return Some(found);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn link_href_by_element_id<'a>(nodes: &'a [Node], element_id: &str) -> Option<&'a str> {
+    for node in nodes {
+        match node {
+            Node::Link { id, href, .. } if id == element_id => return href.as_deref(),
+            Node::Container { children, .. }
+            | Node::List { children, .. }
+            | Node::Item { children }
+            | Node::Table { children, .. }
+            | Node::Row { children }
+            | Node::Cell { children } => {
+                if let Some(href) = link_href_by_element_id(children, element_id) {
+                    return Some(href);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 fn resolve_link_url(base_url: &str, href: &str) -> Result<String> {
@@ -336,7 +459,7 @@ fn resolve_link_url(base_url: &str, href: &str) -> Result<String> {
 
 pub async fn type_text(
     session_id: &str,
-    element_id: u32,
+    target: &str,
     text: &str,
     page_num: Option<u32>,
     options: ActionOptions,
@@ -351,12 +474,7 @@ pub async fn type_text(
         },
     )
     .await?;
-    let element_key = format!("e{element_id}");
-    let ref_id = page
-        .element_refs
-        .get(&element_key)
-        .cloned()
-        .ok_or_else(|| element_lookup_error(session_id, page_num, &element_key))?;
+    let (element_key, ref_id) = resolve_element_target(target, &page, session_id, page_num)?;
 
     let type_data = send_ok(Request::new(
         actions::TYPE,
@@ -372,7 +490,7 @@ pub async fn type_text(
         .get("changed")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
-    let should_fetch_page = options.page_after || (!options.json_mode && !options.quiet);
+    let should_fetch_page = !options.quiet;
     let updated = if should_fetch_page {
         Some(fetch_action_page(session_id, page_num, navigated).await?)
     } else {
@@ -429,17 +547,21 @@ pub async fn search(session_id: &str, query: &str, fresh: bool, json_mode: bool)
 
 pub async fn wait(
     session_id: &str,
-    selector: Option<&str>,
+    for_text: Option<&str>,
     timeout: Option<u64>,
-    page_after: bool,
+    quiet: bool,
     json_mode: bool,
 ) -> Result<()> {
     let timeout_ms = timeout.unwrap_or(30_000);
+
+    if let Some(query) = for_text {
+        return wait_for_text(session_id, query, timeout_ms, quiet, json_mode).await;
+    }
+
     let response = send_request(&Request::new(
         actions::WAIT,
         json!({
             "session_id": session_id,
-            "selector": selector,
             "timeout": timeout_ms
         }),
     ))
@@ -447,19 +569,15 @@ pub async fn wait(
 
     let wait_output = if response.ok {
         let resp = response.data.unwrap_or_default();
-        let page = if page_after {
+        let page = if !quiet {
             Some(fetch_action_page(session_id, None, true).await?)
         } else {
             None
         };
         WaitOutput {
             session_id: session_id.to_string(),
-            selector: selector.map(str::to_string),
-            selector_found: resp
-                .get("selector_found")
-                .and_then(|value| value.as_bool())
-                .unwrap_or(selector.is_none()),
             timed_out: false,
+            found: true,
             page_updated: resp
                 .get("changed")
                 .and_then(|value| value.as_bool())
@@ -470,9 +588,8 @@ pub async fn wait(
     } else if is_wait_timeout_error(&response) {
         WaitOutput {
             session_id: session_id.to_string(),
-            selector: selector.map(str::to_string),
-            selector_found: false,
             timed_out: true,
+            found: false,
             page_updated: false,
             waited_ms: Some(timeout_ms),
             page: None,
@@ -485,14 +602,79 @@ pub async fn wait(
         print_json(&wait_output)?;
     } else if wait_output.timed_out {
         println!("Wait timed out after {timeout_ms}ms.");
+    } else if quiet {
+        println!("wait ok");
     } else if let Some(page) = wait_output.page.as_ref() {
         println!("{}", crate::cli::output::format_page(page, false));
-    } else if let Some(selector) = selector {
-        println!("Selector became available: {selector}");
     } else {
         println!("Page reached a stable state.");
     }
     Ok(())
+}
+
+async fn wait_for_text(
+    session_id: &str,
+    query: &str,
+    timeout_ms: u64,
+    quiet: bool,
+    json_mode: bool,
+) -> Result<()> {
+    let start = std::time::Instant::now();
+    let poll_interval = std::time::Duration::from_millis(500);
+
+    loop {
+        let snapshot = fetch_snapshot(session_id, actions::GET_PAGE_FRESH).await?;
+        let results = search_snapshot(&snapshot, query);
+
+        if !results.matches.is_empty() {
+            let page = if !quiet {
+                Some(parse_page_from_snapshot(&snapshot, None)?)
+            } else {
+                None
+            };
+            let waited_ms = start.elapsed().as_millis() as u64;
+
+            let output = WaitOutput {
+                session_id: session_id.to_string(),
+                timed_out: false,
+                found: true,
+                page_updated: true,
+                waited_ms: Some(waited_ms),
+                page,
+            };
+
+            if json_mode {
+                print_json(&output)?;
+            } else if quiet {
+                println!("wait ok: \"{}\" found", query);
+            } else if let Some(page) = output.page.as_ref() {
+                println!("{}", crate::cli::output::format_page(page, false));
+            }
+            return Ok(());
+        }
+
+        if start.elapsed().as_millis() as u64 >= timeout_ms {
+            let output = WaitOutput {
+                session_id: session_id.to_string(),
+                timed_out: true,
+                found: false,
+                page_updated: false,
+                waited_ms: Some(timeout_ms),
+                page: None,
+            };
+            if json_mode {
+                print_json(&output)?;
+            } else {
+                println!(
+                    "Wait timed out after {timeout_ms}ms: \"{}\" not found.",
+                    query
+                );
+            }
+            return Ok(());
+        }
+
+        tokio::time::sleep(poll_interval).await;
+    }
 }
 
 pub async fn text(
@@ -535,6 +717,7 @@ pub async fn block(
     block_id: &str,
     source_page: Option<u32>,
     page_num: Option<u32>,
+    all: bool,
     fresh: bool,
     json_mode: bool,
 ) -> Result<()> {
@@ -548,10 +731,36 @@ pub async fn block(
         },
     )
     .await?;
-    let block = resolve_block(&page, block_id, page_num)
-        .ok_or_else(|| block_lookup_error(session_id, source_page, block_id))?;
 
-    println!("{}", crate::cli::output::format_block(&block, json_mode));
+    if all {
+        let block = resolve_block_all(&page, block_id)
+            .ok_or_else(|| block_lookup_error(session_id, source_page, block_id))?;
+        println!("{}", crate::cli::output::format_block(&block, json_mode));
+    } else {
+        let block = resolve_block(&page, block_id, page_num)
+            .ok_or_else(|| block_lookup_error(session_id, source_page, block_id))?;
+        println!("{}", crate::cli::output::format_block(&block, json_mode));
+    }
+    Ok(())
+}
+
+pub async fn view(
+    session_id: &str,
+    target: &str,
+    page_num: Option<u32>,
+    fresh: bool,
+    json_mode: bool,
+) -> Result<()> {
+    use crate::page::structure::extract_view;
+
+    let page = resolve_page(
+        session_id,
+        page_num,
+        if fresh { actions::GET_PAGE_FRESH } else { actions::GET_PAGE },
+    ).await?;
+
+    let view = extract_view(&page, target)?;
+    println!("{}", crate::cli::output::format_view(&view, json_mode));
     Ok(())
 }
 
@@ -782,7 +991,7 @@ fn validate_setup_args(browser: &str, extension_id: Option<&str>) -> Result<()> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::page::structure::Element;
+    use crate::page::structure::Node;
     use crate::protocol::messages::Response;
 
     #[test]
@@ -817,26 +1026,32 @@ mod tests {
 
     #[test]
     fn link_href_lookup_only_returns_links_with_href() {
-        let elements = vec![
-            Element::Button {
+        let nodes = vec![
+            Node::Button {
                 id: "e1".into(),
                 text: "Submit".into(),
             },
-            Element::Link {
-                id: "e2".into(),
-                text: "Docs".into(),
-                href: Some("/docs".into()),
-            },
-            Element::Link {
-                id: "e3".into(),
-                text: "Broken".into(),
-                href: None,
+            Node::Container {
+                tag: "section".into(),
+                role: None,
+                children: vec![
+                    Node::Link {
+                        id: "e2".into(),
+                        text: "Docs".into(),
+                        href: Some("/docs".into()),
+                    },
+                    Node::Link {
+                        id: "e3".into(),
+                        text: "Broken".into(),
+                        href: None,
+                    },
+                ],
             },
         ];
 
-        assert_eq!(link_href_by_element_id(&elements, "e1"), None);
-        assert_eq!(link_href_by_element_id(&elements, "e2"), Some("/docs"));
-        assert_eq!(link_href_by_element_id(&elements, "e3"), None);
+        assert_eq!(link_href_by_element_id(&nodes, "e1"), None);
+        assert_eq!(link_href_by_element_id(&nodes, "e2"), Some("/docs"));
+        assert_eq!(link_href_by_element_id(&nodes, "e3"), None);
     }
 
     #[test]

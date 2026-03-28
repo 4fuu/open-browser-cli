@@ -17,6 +17,14 @@ pub fn format_block(block: &BlockData, json: bool) -> String {
     }
 }
 
+pub fn format_view(view: &crate::page::structure::ViewData, json: bool) -> String {
+    if json {
+        serde_json::to_string_pretty(view).unwrap()
+    } else {
+        crate::page::xml::render_view_xml(view)
+    }
+}
+
 #[cfg_attr(not(test), allow(dead_code))]
 pub fn format_response(response: &Response, json_mode: bool) -> String {
     if json_mode {
@@ -141,7 +149,7 @@ pub fn format_session_list(data: &serde_json::Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::page::structure::{Element, PageData, SearchMatch};
+    use crate::page::structure::{Node, PageData, SearchMatch};
     use crate::protocol::messages::Response;
 
     fn sample_page() -> PageData {
@@ -153,12 +161,12 @@ mod tests {
             truncated: false,
             shown: 2,
             total: 2,
-            elements: vec![
-                Element::Heading {
+            nodes: vec![
+                Node::Heading {
                     level: 1,
                     text: "Hello".into(),
                 },
-                Element::Text {
+                Node::Text {
                     id: None,
                     text: "World".into(),
                 },
@@ -174,7 +182,7 @@ mod tests {
         let output = format_page(&sample_page(), true);
         let parsed: serde_json::Value = serde_json::from_str(&output).unwrap();
         assert_eq!(parsed["title"], "Example");
-        assert!(parsed["elements"].is_array());
+        assert!(parsed["nodes"].is_array());
     }
 
     #[test]

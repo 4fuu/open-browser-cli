@@ -137,6 +137,7 @@ async function handleOpen(req: Request): Promise<Response> {
     params: {
       session_id: sessionId,
       request_id: req.id,
+      wait_after_load: req.params.wait_after_load,
     },
   });
   if (!snapshotResult.ok) {
@@ -216,6 +217,7 @@ async function handleSnapshotRequest(req: Request): Promise<Response> {
     params: {
       session_id: session.value.session_id,
       request_id: req.id,
+      wait_after_load: req.params.wait_after_load,
     },
   });
 

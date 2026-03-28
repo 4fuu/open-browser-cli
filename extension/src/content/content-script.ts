@@ -30,12 +30,14 @@ const STABILITY_WINDOW_MS = 500;
 const DEFAULT_WAIT_TIMEOUT_MS = 30_000;
 const TYPE_DELAY_MIN_MS = 40;
 const TYPE_DELAY_MAX_MS = 120;
-const IDLE_MOVE_DURATION_MIN_MS = 500;
-const IDLE_MOVE_DURATION_MAX_MS = 1400;
-const IDLE_PAUSE_MIN_MS = 250;
-const IDLE_PAUSE_MAX_MS = 900;
-const TASK_MOVE_DURATION_MIN_MS = 240;
-const TASK_MOVE_DURATION_MAX_MS = 560;
+const IDLE_PAUSE_MIN_MS = 400;
+const IDLE_PAUSE_MAX_MS = 5000;
+// Speed in pixels per second — used to compute duration from distance
+const MOVE_SPEED_MIN_PPS = 280;
+const MOVE_SPEED_MAX_PPS = 700;
+// Minimum/maximum duration regardless of distance
+const MOVE_DURATION_MIN_MS = 180;
+const MOVE_DURATION_MAX_MS = 2400;
 
 let refCounter = 0;
 
@@ -136,26 +138,91 @@ class CursorAgent {
     this.startIdleLoop();
   }
 
-  async moveTo(point: Point, options?: { durationMs?: number; emitMoveEvents?: boolean }): Promise<boolean> {
+  async moveTo(point: Point): Promise<boolean> {
     if (!this.enabled || document.hidden) {
       return false;
     }
 
     const end = this.clampPoint(point);
-    const start = { x: this.currentX, y: this.currentY };
-    const distance = Math.hypot(end.x - start.x, end.y - start.y);
-    if (distance < 1) {
+    const totalDistance = Math.hypot(end.x - this.currentX, end.y - this.currentY);
+    if (totalDistance < 1) {
       this.moveInstant(end.x, end.y);
       return true;
     }
 
-    const durationMs = options?.durationMs ?? jitter(TASK_MOVE_DURATION_MIN_MS, TASK_MOVE_DURATION_MAX_MS);
-    const steps = Math.max(10, Math.round(durationMs / 16));
-    const control = {
-      x: (start.x + end.x) / 2 + (Math.random() - 0.5) * Math.min(140, distance * 0.35),
-      y: (start.y + end.y) / 2 + (Math.random() - 0.5) * Math.min(90, distance * 0.25),
-    };
     const motionToken = ++this.motionToken;
+
+    // Decide whether to insert a detour mid-flight.
+    // Longer distances get a higher chance; short hops almost never detour.
+    const detourChance = clamp(totalDistance / 1200, 0.08, 0.4);
+    const doDetour = Math.random() < detourChance;
+
+    if (doDetour) {
+      // Pick a random progress point (30-70% along the straight line) to break away
+      const breakT = jitter(0.3, 0.7);
+      const breakPoint = {
+        x: this.currentX + (end.x - this.currentX) * breakT,
+        y: this.currentY + (end.y - this.currentY) * breakT,
+      };
+
+      // Offset the break point perpendicular to the path — the "wrong" direction
+      const detourSpread = clamp(totalDistance * 0.25, 30, 180);
+      const detour = this.clampPoint({
+        x: breakPoint.x + (Math.random() - 0.5) * detourSpread * 2,
+        y: breakPoint.y + (Math.random() - 0.5) * detourSpread * 2,
+      });
+
+      // First leg: move toward the detour point
+      if (!await this.moveSegment(detour, motionToken)) {
+        return false;
+      }
+
+      // Brief hesitation at the detour point
+      await delay(jitter(60, 350));
+      if (!this.enabled || motionToken !== this.motionToken) {
+        return false;
+      }
+
+      // Second leg: correct back to the real target
+      if (!await this.moveSegment(end, motionToken)) {
+        return false;
+      }
+    } else {
+      if (!await this.moveSegment(end, motionToken)) {
+        return false;
+      }
+    }
+
+    this.moveInstant(end.x, end.y);
+    return motionToken === this.motionToken;
+  }
+
+  /** Low-level cubic-bezier segment with real mouse events on every frame. */
+  private async moveSegment(target: Point, motionToken: number): Promise<boolean> {
+    const start = { x: this.currentX, y: this.currentY };
+    const distance = Math.hypot(target.x - start.x, target.y - start.y);
+    if (distance < 1) {
+      this.moveInstant(target.x, target.y);
+      return motionToken === this.motionToken;
+    }
+
+    const speed = jitter(MOVE_SPEED_MIN_PPS, MOVE_SPEED_MAX_PPS);
+    const durationMs = clamp((distance / speed) * 1000, MOVE_DURATION_MIN_MS, MOVE_DURATION_MAX_MS);
+    const steps = Math.max(10, Math.round(durationMs / 16));
+
+    const perpX = (target.y - start.y) / distance;
+    const perpY = -(target.x - start.x) / distance;
+    const drift1 = (Math.random() - 0.5) * Math.min(120, distance * 0.3);
+    const drift2 = (Math.random() - 0.5) * Math.min(80, distance * 0.2);
+    const ctrl1 = {
+      x: start.x + (target.x - start.x) * 0.33 + perpX * drift1,
+      y: start.y + (target.y - start.y) * 0.33 + perpY * drift1,
+    };
+    const ctrl2 = {
+      x: start.x + (target.x - start.x) * 0.67 + perpX * drift2,
+      y: start.y + (target.y - start.y) * 0.67 + perpY * drift2,
+    };
+
     let hovered = this.hoveredElement;
 
     for (let index = 1; index <= steps; index++) {
@@ -164,19 +231,15 @@ class CursorAgent {
       }
 
       const t = easeInOutCubic(index / steps);
-      const x = quadraticBezier(start.x, control.x, end.x, t);
-      const y = quadraticBezier(start.y, control.y, end.y, t);
+      const x = cubicBezier(start.x, ctrl1.x, ctrl2.x, target.x, t);
+      const y = cubicBezier(start.y, ctrl1.y, ctrl2.y, target.y, t);
       this.moveInstant(x, y);
+      hovered = dispatchCursorMoveEvent(hovered, x, y);
 
-      if (options?.emitMoveEvents) {
-        hovered = dispatchCursorMoveEvent(hovered, x, y);
-      }
-
-      await delay(jitter(10, 18));
+      await delay(jitter(10, 22));
     }
 
     this.hoveredElement = hovered;
-    this.moveInstant(end.x, end.y);
     return motionToken === this.motionToken;
   }
 
@@ -257,10 +320,7 @@ class CursorAgent {
   private async runIdleLoop(loopToken: number): Promise<void> {
     while (this.enabled && !this.taskMode && !document.hidden && loopToken === this.idleLoopToken) {
       const point = pickIdlePoint();
-      await this.moveTo(point, {
-        durationMs: jitter(IDLE_MOVE_DURATION_MIN_MS, IDLE_MOVE_DURATION_MAX_MS),
-        emitMoveEvents: false,
-      });
+      await this.moveTo(point);
 
       if (!this.enabled || this.taskMode || document.hidden || loopToken !== this.idleLoopToken) {
         return;
@@ -352,6 +412,16 @@ function handlePresenceStop(req: ContentRequest): ContentResponse {
 async function handleSnapshot(req: ContentRequest): Promise<ContentResponse> {
   const sessionId = requireString(req.params.session_id, 'session_id');
   const requestId = requireString(req.params.request_id, 'request_id');
+  const waitAfterLoad = optionalNumber(req.params.wait_after_load);
+
+  if (waitAfterLoad !== undefined && waitAfterLoad > 0) {
+    try {
+      await waitForPageStability({ timeoutMs: waitAfterLoad });
+    } catch {
+      // Timed out waiting for stability — proceed with current DOM state
+    }
+  }
+
   const snapshot = collectSnapshot();
   await streamSnapshot(sessionId, requestId, snapshot);
   return {
@@ -381,10 +451,7 @@ async function handleClick(req: ContentRequest): Promise<ContentResponse> {
 
   try {
     const point = await prepareInteractionPoint(target);
-    await cursorAgent.moveTo(point, {
-      durationMs: jitter(TASK_MOVE_DURATION_MIN_MS, TASK_MOVE_DURATION_MAX_MS),
-      emitMoveEvents: true,
-    });
+    await cursorAgent.moveTo(point);
     await delay(jitter(30, 90));
     await performClickSequence(target, point);
 
@@ -427,10 +494,7 @@ async function handleType(req: ContentRequest): Promise<ContentResponse> {
 
   try {
     const point = await prepareInteractionPoint(target);
-    await cursorAgent.moveTo(point, {
-      durationMs: jitter(TASK_MOVE_DURATION_MIN_MS, TASK_MOVE_DURATION_MAX_MS),
-      emitMoveEvents: true,
-    });
+    await cursorAgent.moveTo(point);
     await delay(jitter(30, 90));
     await performFocusSequence(target, point);
 
@@ -945,9 +1009,12 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
 }
 
-function quadraticBezier(start: number, control: number, end: number, t: number): number {
+function cubicBezier(p0: number, p1: number, p2: number, p3: number, t: number): number {
   const inverse = 1 - t;
-  return inverse * inverse * start + 2 * inverse * t * control + t * t * end;
+  return inverse * inverse * inverse * p0
+    + 3 * inverse * inverse * t * p1
+    + 3 * inverse * t * t * p2
+    + t * t * t * p3;
 }
 
 function easeInOutCubic(t: number): number {

@@ -1,13 +1,11 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-use crate::page::xml::rendered_table_row_lines;
 use crate::protocol::messages::{RawNode, RawSnapshot, Rect};
 
 const MAX_TEXT_LEN: usize = 200;
-const MAX_PAGE_ELEMENTS: usize = 200;
 const MAX_BLOCK_RENDER_LINES: usize = 20;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -19,7 +17,7 @@ pub struct PageData {
     pub truncated: bool,
     pub shown: usize,
     pub total: usize,
-    pub elements: Vec<Element>,
+    pub nodes: Vec<Node>,
     #[serde(skip)]
     pub element_refs: HashMap<String, String>,
     #[serde(skip)]
@@ -30,7 +28,12 @@ pub struct PageData {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-pub enum Element {
+pub enum Node {
+    Container {
+        tag: String,
+        role: Option<String>,
+        children: Vec<Node>,
+    },
     Text {
         id: Option<String>,
         text: String,
@@ -80,21 +83,30 @@ pub enum Element {
     },
     List {
         id: Option<String>,
-        items: Vec<String>,
         truncated: bool,
         shown: usize,
         total_items: usize,
         current_page: u32,
         total_pages: u32,
+        children: Vec<Node>,
+    },
+    Item {
+        children: Vec<Node>,
     },
     Table {
         id: Option<String>,
-        rows: Vec<Vec<String>>,
         truncated: bool,
         shown: usize,
         total_items: usize,
         current_page: u32,
         total_pages: u32,
+        children: Vec<Node>,
+    },
+    Row {
+        children: Vec<Node>,
+    },
+    Cell {
+        children: Vec<Node>,
     },
 }
 
@@ -103,28 +115,28 @@ pub enum Element {
 pub enum BlockData {
     List {
         id: String,
-        items: Vec<String>,
         truncated: bool,
         shown: usize,
         total_items: usize,
         current_page: u32,
         total_pages: u32,
+        children: Vec<Node>,
     },
     Table {
         id: String,
-        rows: Vec<Vec<String>>,
         truncated: bool,
         shown: usize,
         total_items: usize,
         current_page: u32,
         total_pages: u32,
+        children: Vec<Node>,
     },
 }
 
 #[derive(Debug, Clone)]
 pub enum StoredBlock {
-    List { items: Vec<String> },
-    Table { rows: Vec<Vec<String>> },
+    List { items: Vec<Node> },
+    Table { rows: Vec<Node> },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -141,419 +153,6 @@ pub struct SearchMatch {
 pub struct SearchResults {
     pub query: String,
     pub matches: Vec<SearchMatch>,
-}
-
-#[derive(Debug, Clone)]
-struct ProcessedNode {
-    order: usize,
-    interactive: bool,
-    element: Element,
-    ref_id: Option<String>,
-    full_text: Option<(String, String)>,
-    full_block: Option<(String, StoredBlock)>,
-}
-
-#[derive(Debug, Clone)]
-struct PendingText {
-    order: usize,
-    parent: Option<String>,
-    rect: Rect,
-    text: String,
-}
-
-pub fn truncate_text(text: &str, max_len: usize) -> String {
-    let chars: Vec<char> = text.chars().collect();
-    if chars.len() <= max_len {
-        text.to_string()
-    } else {
-        let truncated: String = chars[..max_len].iter().collect();
-        format!("{truncated}[...truncated]")
-    }
-}
-
-pub fn parse_snapshot(value: &serde_json::Value) -> Result<RawSnapshot> {
-    serde_json::from_value(value.clone()).context("invalid raw snapshot payload")
-}
-
-#[allow(dead_code)]
-pub fn parse_page(value: &serde_json::Value, requested_page: Option<u32>) -> Result<PageData> {
-    let snapshot = parse_snapshot(value)?;
-    parse_page_from_snapshot(&snapshot, requested_page)
-}
-
-pub fn parse_page_from_snapshot(
-    snapshot: &RawSnapshot,
-    requested_page: Option<u32>,
-) -> Result<PageData> {
-    let viewport_height = snapshot.viewport.height.max(1.0);
-    let scroll_height = snapshot.scroll.height.max(viewport_height);
-    let total_pages = (scroll_height / viewport_height).ceil().max(1.0) as u32;
-    let fallback_page = (snapshot.scroll.top / viewport_height).floor() as u32 + 1;
-    let current_page = requested_page
-        .unwrap_or(fallback_page)
-        .clamp(1, total_pages.max(1));
-
-    let page_top = (current_page.saturating_sub(1) as f64) * viewport_height;
-    let page_bottom = page_top + viewport_height;
-
-    let node_by_ref: HashMap<&str, &RawNode> = snapshot
-        .nodes
-        .iter()
-        .map(|node| (node.ref_id.as_str(), node))
-        .collect();
-    let mut child_count: HashMap<&str, usize> = HashMap::new();
-    let mut children_by_parent: HashMap<&str, Vec<&RawNode>> = HashMap::new();
-    for node in &snapshot.nodes {
-        if let Some(parent) = node.parent.as_deref() {
-            *child_count.entry(parent).or_insert(0) += 1;
-            children_by_parent.entry(parent).or_default().push(node);
-        }
-    }
-
-    let mut next_element_id = 1usize;
-    let mut next_text_id = 1usize;
-    let mut next_block_id = 1usize;
-    let mut processed = Vec::new();
-    let mut pending_text: Option<PendingText> = None;
-    let mut consumed: HashSet<&str> = HashSet::new();
-
-    for (order, node) in snapshot.nodes.iter().enumerate() {
-        if !intersects_page(&node.rect, page_top, page_bottom) {
-            continue;
-        }
-
-        if consumed.contains(node.ref_id.as_str()) {
-            continue;
-        }
-
-        if let Some(interactive) = classify_interactive(node, &node_by_ref) {
-            flush_pending_text(&mut pending_text, &mut processed, &mut next_text_id);
-            let id = format!("e{next_element_id}");
-            next_element_id += 1;
-            processed.push(ProcessedNode {
-                order,
-                interactive: true,
-                element: interactive.into_element(id),
-                ref_id: Some(node.ref_id.clone()),
-                full_text: None,
-                full_block: None,
-            });
-            continue;
-        }
-
-        if has_interactive_ancestor(node, &node_by_ref) {
-            continue;
-        }
-
-        if matches!(node.tag.as_str(), "ul" | "ol") {
-            flush_pending_text(&mut pending_text, &mut processed, &mut next_text_id);
-            let items = collect_list_items(&node.ref_id, &children_by_parent, &mut consumed);
-            consumed.insert(node.ref_id.as_str());
-            if !items.is_empty() {
-                let (element, full_block) = build_list_element(items, &mut next_block_id);
-                processed.push(ProcessedNode {
-                    order,
-                    interactive: false,
-                    element,
-                    ref_id: None,
-                    full_text: None,
-                    full_block,
-                });
-            }
-            continue;
-        }
-
-        if node.tag == "table" {
-            flush_pending_text(&mut pending_text, &mut processed, &mut next_text_id);
-            let rows = collect_table_rows(&node.ref_id, &children_by_parent, &mut consumed);
-            consumed.insert(node.ref_id.as_str());
-            if !rows.is_empty() {
-                let (element, full_block) = build_table_element(rows, &mut next_block_id);
-                processed.push(ProcessedNode {
-                    order,
-                    interactive: false,
-                    element,
-                    ref_id: None,
-                    full_text: None,
-                    full_block,
-                });
-            }
-            continue;
-        }
-
-        if let Some((level, text)) = classify_heading(node) {
-            flush_pending_text(&mut pending_text, &mut processed, &mut next_text_id);
-            processed.push(ProcessedNode {
-                order,
-                interactive: false,
-                element: Element::Heading { level, text },
-                ref_id: None,
-                full_text: None,
-                full_block: None,
-            });
-            continue;
-        }
-
-        let normalized = normalize_text(&node.text);
-        if normalized.is_empty() || !should_emit_text(node, &normalized, &child_count) {
-            continue;
-        }
-
-        match &mut pending_text {
-            Some(pending)
-                if pending.parent == node.parent
-                    && pending.order + 1 == order
-                    && pending.text != normalized =>
-            {
-                pending.text = format!("{} {}", pending.text, normalized);
-                pending.rect = merge_rect(&pending.rect, &node.rect);
-            }
-            Some(_) => {
-                flush_pending_text(&mut pending_text, &mut processed, &mut next_text_id);
-                pending_text = Some(PendingText {
-                    order,
-                    parent: node.parent.clone(),
-                    rect: node.rect.clone(),
-                    text: normalized,
-                });
-            }
-            None => {
-                pending_text = Some(PendingText {
-                    order,
-                    parent: node.parent.clone(),
-                    rect: node.rect.clone(),
-                    text: normalized,
-                });
-            }
-        }
-    }
-
-    flush_pending_text(&mut pending_text, &mut processed, &mut next_text_id);
-
-    let total = processed.len();
-    let truncated = total > MAX_PAGE_ELEMENTS;
-    let selected = if truncated {
-        truncate_processed(processed)
-    } else {
-        let mut nodes = processed;
-        nodes.sort_by_key(|node| node.order);
-        nodes
-    };
-
-    let mut elements = Vec::with_capacity(selected.len());
-    let mut element_refs = HashMap::new();
-    let mut full_texts = HashMap::new();
-    let mut full_blocks = HashMap::new();
-
-    for node in selected {
-        if let Some(ref_id) = node.ref_id {
-            let element_id = extract_element_id(&node.element);
-            element_refs.insert(element_id, ref_id);
-        }
-        if let Some((text_id, full_text)) = node.full_text {
-            full_texts.insert(text_id, full_text);
-        }
-        if let Some((block_id, block)) = node.full_block {
-            full_blocks.insert(block_id, block);
-        }
-        elements.push(node.element);
-    }
-
-    Ok(PageData {
-        url: snapshot.url.clone(),
-        title: snapshot.title.clone(),
-        current_page,
-        total_pages,
-        truncated,
-        shown: elements.len(),
-        total,
-        elements,
-        element_refs,
-        full_texts,
-        full_blocks,
-    })
-}
-
-pub fn resolve_block(
-    page: &PageData,
-    block_id: &str,
-    requested_page: Option<u32>,
-) -> Option<BlockData> {
-    page.full_blocks
-        .get(block_id)
-        .map(|block| block.resolve(block_id, requested_page))
-}
-
-pub fn search_snapshot(snapshot: &RawSnapshot, query: &str) -> SearchResults {
-    let query = query.trim().to_string();
-    if query.is_empty() {
-        return SearchResults {
-            query,
-            matches: Vec::new(),
-        };
-    }
-
-    let needle = query.to_lowercase();
-    let viewport_height = snapshot.viewport.height.max(1.0);
-    let scroll_height = snapshot.scroll.height.max(viewport_height);
-    let total_pages = (scroll_height / viewport_height).ceil().max(1.0) as u32;
-    let interactive_ids = interactive_ids_by_ref(snapshot, total_pages);
-    let mut seen_refs = HashSet::new();
-    let mut scored_matches = Vec::new();
-
-    for node in &snapshot.nodes {
-        let page = page_for_rect(&node.rect, viewport_height, total_pages);
-        let fields = searchable_fields(node);
-        let Some(best_match) = fields
-            .iter()
-            .filter_map(|field| {
-                let normalized = normalize_text(field.value);
-                if normalized.is_empty() {
-                    return None;
-                }
-                let lower = normalized.to_lowercase();
-                let idx = lower.find(&needle)?;
-                Some((
-                    field,
-                    normalized,
-                    lower,
-                    idx,
-                    search_rank(node, field.name, idx),
-                ))
-            })
-            .min_by_key(|(_, _, _, _, rank)| rank.clone())
-        else {
-            continue;
-        };
-
-        if !seen_refs.insert(node.ref_id.clone()) {
-            continue;
-        }
-
-        let (field, normalized, lower, _, rank) = best_match;
-        let context_source = if field.name == "text" {
-            &normalized
-        } else {
-            field.value
-        };
-        let context_lower = if field.name == "text" {
-            lower.as_str()
-        } else {
-            field.lower.as_str()
-        };
-
-        scored_matches.push((
-            rank,
-            SearchMatch {
-                page,
-                element_id: interactive_ids.get(&(page, node.ref_id.clone())).cloned(),
-                ref_id: node.ref_id.clone(),
-                tag: node.tag.clone(),
-                text: normalize_text(&node.text),
-                context: excerpt_around_match(context_source, context_lower, &needle),
-            },
-        ));
-    }
-
-    scored_matches.sort_by(|(left_rank, left_match), (right_rank, right_match)| {
-        left_rank
-            .cmp(right_rank)
-            .then(left_match.page.cmp(&right_match.page))
-            .then(left_match.tag.cmp(&right_match.tag))
-    });
-
-    let matches = scored_matches
-        .into_iter()
-        .map(|(_, item)| item)
-        .take(50)
-        .collect();
-
-    SearchResults { query, matches }
-}
-
-#[derive(Debug, Clone)]
-struct SearchField<'a> {
-    name: &'static str,
-    value: &'a str,
-    lower: String,
-}
-
-fn searchable_fields(node: &RawNode) -> Vec<SearchField<'_>> {
-    let mut fields = Vec::new();
-    let text = normalize_text(&node.text);
-    if !text.is_empty() {
-        fields.push(SearchField {
-            name: "text",
-            lower: text.to_lowercase(),
-            value: &node.text,
-        });
-    }
-
-    for (name, attr) in [
-        ("aria-label", "aria-label"),
-        ("title", "title"),
-        ("placeholder", "placeholder"),
-        ("value", "value"),
-        ("name", "name"),
-        ("href", "href"),
-    ] {
-        if let Some(value) = node
-            .attrs
-            .get(attr)
-            .filter(|value| !value.trim().is_empty())
-        {
-            fields.push(SearchField {
-                name,
-                lower: value.to_lowercase(),
-                value,
-            });
-        }
-    }
-
-    fields
-}
-
-fn search_rank(node: &RawNode, field_name: &str, match_index: usize) -> (u8, u8, usize, String) {
-    let interactive_boost = if is_interactive_tag(node.tag.as_str(), &node.attrs) {
-        0
-    } else {
-        1
-    };
-    let field_rank = match field_name {
-        "text" => 0,
-        "aria-label" => 1,
-        "placeholder" => 2,
-        "value" => 3,
-        "name" => 4,
-        "href" => 5,
-        _ => 9,
-    };
-
-    (
-        interactive_boost,
-        field_rank,
-        match_index,
-        node.ref_id.clone(),
-    )
-}
-
-fn interactive_ids_by_ref(
-    snapshot: &RawSnapshot,
-    total_pages: u32,
-) -> HashMap<(u32, String), String> {
-    let mut ids = HashMap::new();
-    for page in 1..=total_pages.max(1) {
-        if let Ok(page_data) = parse_page_from_snapshot(snapshot, Some(page)) {
-            for (element_id, ref_id) in page_data.element_refs {
-                ids.insert((page, ref_id), element_id);
-            }
-        }
-    }
-    ids
-}
-
-fn page_for_rect(rect: &Rect, viewport_height: f64, total_pages: u32) -> u32 {
-    ((rect.y / viewport_height).floor() as u32 + 1).clamp(1, total_pages.max(1))
 }
 
 #[derive(Debug, Clone)]
@@ -593,57 +192,927 @@ enum InteractiveKind {
     },
 }
 
-impl InteractiveKind {
-    fn into_element(self, id: String) -> Element {
-        match self {
-            Self::Link { text, href } => Element::Link { id, text, href },
-            Self::Button { text } => Element::Button { id, text },
-            Self::Input {
-                text,
-                input_type,
-                placeholder,
-                value,
-                disabled,
-            } => Element::Input {
-                id,
-                input_type,
-                placeholder,
-                value: value.or(if text.is_empty() { None } else { Some(text) }),
-                disabled,
-            },
-            Self::Checkbox { text, checked } => Element::Checkbox { id, text, checked },
-            Self::Radio {
-                text,
-                name,
-                selected,
-            } => Element::Radio {
-                id,
-                text,
-                name,
-                selected,
-            },
-            Self::Select {
-                text,
-                selected,
-                disabled,
-            } => Element::Select {
-                id,
-                text,
-                selected,
-                disabled,
-            },
-            Self::Textarea {
-                text,
-                placeholder,
-                disabled,
-            } => Element::Textarea {
-                id,
-                text,
-                placeholder,
-                disabled,
-            },
+#[derive(Debug, Clone)]
+struct BuildState {
+    next_element_id: usize,
+    next_text_id: usize,
+    next_block_id: usize,
+    element_refs: HashMap<String, String>,
+    full_texts: HashMap<String, String>,
+    full_blocks: HashMap<String, StoredBlock>,
+}
+
+#[derive(Debug, Clone)]
+struct ViewFilter {
+    page_top: f64,
+    page_bottom: f64,
+}
+
+pub fn truncate_text(text: &str, max_len: usize) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    if chars.len() <= max_len {
+        text.to_string()
+    } else {
+        let truncated: String = chars[..max_len].iter().collect();
+        format!("{truncated}[...truncated]")
+    }
+}
+
+pub fn parse_snapshot(value: &serde_json::Value) -> Result<RawSnapshot> {
+    serde_json::from_value(value.clone()).context("invalid raw snapshot payload")
+}
+
+#[allow(dead_code)]
+pub fn parse_page(value: &serde_json::Value, requested_page: Option<u32>) -> Result<PageData> {
+    let snapshot = parse_snapshot(value)?;
+    parse_page_from_snapshot(&snapshot, requested_page)
+}
+
+pub fn parse_page_from_snapshot(
+    snapshot: &RawSnapshot,
+    requested_page: Option<u32>,
+) -> Result<PageData> {
+    let viewport_height = snapshot.viewport.height.max(1.0);
+    let scroll_height = snapshot.scroll.height.max(viewport_height);
+    let total_pages = (scroll_height / viewport_height).ceil().max(1.0) as u32;
+    let fallback_page = (snapshot.scroll.top / viewport_height).floor() as u32 + 1;
+    let current_page = requested_page
+        .unwrap_or(fallback_page)
+        .clamp(1, total_pages.max(1));
+
+    let page_top = (current_page.saturating_sub(1) as f64) * viewport_height;
+    let page_bottom = page_top + viewport_height;
+    let filter = ViewFilter {
+        page_top,
+        page_bottom,
+    };
+
+    let node_by_ref: HashMap<&str, &RawNode> = snapshot
+        .nodes
+        .iter()
+        .map(|node| (node.ref_id.as_str(), node))
+        .collect();
+    let roots = root_refs(snapshot);
+    let children_by_parent = build_children_map(snapshot);
+
+    let mut state = BuildState {
+        next_element_id: 1,
+        next_text_id: 1,
+        next_block_id: 1,
+        element_refs: HashMap::new(),
+        full_texts: HashMap::new(),
+        full_blocks: HashMap::new(),
+    };
+
+    let mut nodes = Vec::new();
+    for root_ref in roots {
+        let Some(root) = node_by_ref.get(root_ref.as_str()).copied() else {
+            continue;
+        };
+        if root.tag == "body" {
+            nodes.extend(build_child_nodes(
+                root.ref_id.as_str(),
+                &children_by_parent,
+                &node_by_ref,
+                &filter,
+                &mut state,
+            ));
+            continue;
+        }
+        if let Some(node) = build_node(root, &children_by_parent, &node_by_ref, &filter, &mut state)
+        {
+            nodes.push(node);
         }
     }
+
+    let total = count_nodes(&nodes);
+    let shown = total;
+
+    Ok(PageData {
+        url: snapshot.url.clone(),
+        title: snapshot.title.clone(),
+        current_page,
+        total_pages,
+        truncated: false,
+        shown,
+        total,
+        nodes,
+        element_refs: state.element_refs,
+        full_texts: state.full_texts,
+        full_blocks: state.full_blocks,
+    })
+}
+
+pub fn resolve_block(
+    page: &PageData,
+    block_id: &str,
+    requested_page: Option<u32>,
+) -> Option<BlockData> {
+    page.full_blocks
+        .get(block_id)
+        .map(|block| block.resolve(block_id, requested_page))
+}
+
+pub fn resolve_block_all(
+    page: &PageData,
+    block_id: &str,
+) -> Option<BlockData> {
+    page.full_blocks
+        .get(block_id)
+        .map(|block| block.resolve_all(block_id))
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ViewData {
+    pub target: String,
+    pub url: String,
+    pub title: String,
+    pub context_tag: Option<String>,
+    pub nodes: Vec<Node>,
+}
+
+pub fn extract_view(page: &PageData, target: &str) -> Result<ViewData> {
+    // Case 1: Block ID (b1, b2, ...) — auto-expand all pages
+    if target.starts_with('b') && target[1..].chars().all(|c| c.is_ascii_digit()) {
+        if let Some(block) = page.full_blocks.get(target) {
+            let (context_tag, nodes) = match block.resolve_all(target) {
+                BlockData::List { children, .. } => (Some("list".to_string()), children),
+                BlockData::Table { children, .. } => (Some("table".to_string()), children),
+            };
+            return Ok(ViewData {
+                target: target.to_string(),
+                url: page.url.clone(),
+                title: page.title.clone(),
+                context_tag,
+                nodes,
+            });
+        }
+    }
+
+    // Case 2: Text ID (t1, t2, ...) — return full text
+    if target.starts_with('t') && target[1..].chars().all(|c| c.is_ascii_digit()) {
+        if let Some(full_text) = page.full_texts.get(target) {
+            return Ok(ViewData {
+                target: target.to_string(),
+                url: page.url.clone(),
+                title: page.title.clone(),
+                context_tag: None,
+                nodes: vec![Node::Text { id: Some(target.to_string()), text: full_text.clone() }],
+            });
+        }
+    }
+
+    // Case 3: Element ID — find the element and extract its context subtree
+    // Accept both "e3" and "3" format
+    let element_id = if target.starts_with('e') && target[1..].chars().all(|c| c.is_ascii_digit()) {
+        target.to_string()
+    } else if target.chars().all(|c| c.is_ascii_digit()) {
+        format!("e{target}")
+    } else {
+        // Case 4: Text query — search for matching interactive element
+        let found = find_view_target_by_query(&page.nodes, target)
+            .ok_or_else(|| anyhow::anyhow!(
+                "no element matching \"{target}\" found on the current page"
+            ))?;
+        found
+    };
+
+    // Extract the subtree containing this element
+    let subtree = extract_subtree_for_element(&page.nodes, &element_id, &page.full_blocks);
+    if subtree.is_empty() {
+        anyhow::bail!("element {element_id} not found in current page tree");
+    }
+
+    let context_tag = match &subtree[0] {
+        Node::Container { tag, .. } => Some(tag.clone()),
+        Node::List { .. } => Some("list".to_string()),
+        Node::Table { .. } => Some("table".to_string()),
+        _ => None,
+    };
+
+    Ok(ViewData {
+        target: element_id,
+        url: page.url.clone(),
+        title: page.title.clone(),
+        context_tag,
+        nodes: subtree,
+    })
+}
+
+fn find_view_target_by_query(nodes: &[Node], query: &str) -> Option<String> {
+    let needle = query.to_lowercase();
+    find_view_target_recursive(nodes, &needle)
+}
+
+fn find_view_target_recursive(nodes: &[Node], needle: &str) -> Option<String> {
+    for node in nodes {
+        match node {
+            Node::Link { id, text, href, .. } => {
+                if text.to_lowercase().contains(needle)
+                    || href.as_deref().unwrap_or("").to_lowercase().contains(needle)
+                {
+                    return Some(id.clone());
+                }
+            }
+            Node::Button { id, text, .. } => {
+                if text.to_lowercase().contains(needle) {
+                    return Some(id.clone());
+                }
+            }
+            Node::Input { id, placeholder, value, .. } => {
+                if placeholder.as_deref().unwrap_or("").to_lowercase().contains(needle)
+                    || value.as_deref().unwrap_or("").to_lowercase().contains(needle)
+                {
+                    return Some(id.clone());
+                }
+            }
+            Node::Checkbox { id, text, .. }
+            | Node::Radio { id, text, .. }
+            | Node::Select { id, text, .. }
+            | Node::Textarea { id, text, .. } => {
+                if text.to_lowercase().contains(needle) {
+                    return Some(id.clone());
+                }
+            }
+            Node::Text { id: Some(tid), text } => {
+                if text.to_lowercase().contains(needle) {
+                    return Some(tid.clone());
+                }
+            }
+            Node::Container { children, .. }
+            | Node::List { children, .. }
+            | Node::Item { children }
+            | Node::Table { children, .. }
+            | Node::Row { children }
+            | Node::Cell { children } => {
+                if let Some(found) = find_view_target_recursive(children, needle) {
+                    return Some(found);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn extract_subtree_for_element(nodes: &[Node], element_id: &str, full_blocks: &HashMap<String, StoredBlock>) -> Vec<Node> {
+    for node in nodes {
+        if let Some(result) = find_context_subtree(node, element_id, full_blocks) {
+            return result;
+        }
+    }
+    Vec::new()
+}
+
+fn find_context_subtree(node: &Node, element_id: &str, full_blocks: &HashMap<String, StoredBlock>) -> Option<Vec<Node>> {
+    if node_has_id(node, element_id) {
+        return Some(vec![node.clone()]);
+    }
+
+    match node {
+        Node::Container { tag, children, .. } => {
+            if subtree_contains_id(children, element_id) {
+                if is_semantic_container(tag) {
+                    return Some(vec![node.clone()]);
+                }
+                for child in children {
+                    if let Some(result) = find_context_subtree(child, element_id, full_blocks) {
+                        return Some(result);
+                    }
+                }
+                return Some(vec![node.clone()]);
+            }
+        }
+        Node::List { id, children, .. } => {
+            if subtree_contains_id(children, element_id) {
+                if let Some(block_id) = id {
+                    if let Some(block) = full_blocks.get(block_id) {
+                        let expanded = block.resolve_all(block_id);
+                        return Some(vec![match expanded {
+                            BlockData::List { id, shown, total_items, children, .. } => Node::List {
+                                id: Some(id),
+                                truncated: false,
+                                shown,
+                                total_items,
+                                current_page: 1,
+                                total_pages: 1,
+                                children,
+                            },
+                            _ => node.clone(),
+                        }]);
+                    }
+                }
+                return Some(vec![node.clone()]);
+            }
+        }
+        Node::Table { id, children, .. } => {
+            if subtree_contains_id(children, element_id) {
+                if let Some(block_id) = id {
+                    if let Some(block) = full_blocks.get(block_id) {
+                        let expanded = block.resolve_all(block_id);
+                        return Some(vec![match expanded {
+                            BlockData::Table { id, shown, total_items, children, .. } => Node::Table {
+                                id: Some(id),
+                                truncated: false,
+                                shown,
+                                total_items,
+                                current_page: 1,
+                                total_pages: 1,
+                                children,
+                            },
+                            _ => node.clone(),
+                        }]);
+                    }
+                }
+                return Some(vec![node.clone()]);
+            }
+        }
+        Node::Item { children }
+        | Node::Row { children }
+        | Node::Cell { children } => {
+            if subtree_contains_id(children, element_id) {
+                return Some(vec![node.clone()]);
+            }
+        }
+        _ => {}
+    }
+    None
+}
+
+fn node_has_id(node: &Node, id: &str) -> bool {
+    match node {
+        Node::Link { id: nid, .. }
+        | Node::Button { id: nid, .. }
+        | Node::Input { id: nid, .. }
+        | Node::Checkbox { id: nid, .. }
+        | Node::Radio { id: nid, .. }
+        | Node::Select { id: nid, .. }
+        | Node::Textarea { id: nid, .. } => nid == id,
+        Node::Text { id: Some(nid), .. } => nid == id,
+        Node::List { id: Some(nid), .. } | Node::Table { id: Some(nid), .. } => nid == id,
+        _ => false,
+    }
+}
+
+fn subtree_contains_id(nodes: &[Node], id: &str) -> bool {
+    nodes.iter().any(|n| node_contains_id(n, id))
+}
+
+fn node_contains_id(node: &Node, id: &str) -> bool {
+    if node_has_id(node, id) {
+        return true;
+    }
+    match node {
+        Node::Container { children, .. }
+        | Node::List { children, .. }
+        | Node::Item { children }
+        | Node::Table { children, .. }
+        | Node::Row { children }
+        | Node::Cell { children } => subtree_contains_id(children, id),
+        _ => false,
+    }
+}
+
+fn is_semantic_container(tag: &str) -> bool {
+    matches!(
+        tag,
+        "section" | "article" | "nav" | "main" | "header" | "footer"
+        | "aside" | "form" | "dialog" | "fieldset" | "details" | "summary"
+    )
+}
+
+pub fn search_snapshot(snapshot: &RawSnapshot, query: &str) -> SearchResults {
+    let needle = query.trim().to_lowercase();
+    if needle.is_empty() {
+        return SearchResults {
+            query: query.to_string(),
+            matches: Vec::new(),
+        };
+    }
+
+    let viewport_height = snapshot.viewport.height.max(1.0);
+    let scroll_height = snapshot.scroll.height.max(viewport_height);
+    let total_pages = (scroll_height / viewport_height).ceil().max(1.0) as u32;
+    let interactive_ids = interactive_ids_by_ref(snapshot, total_pages);
+
+    let mut matches = Vec::new();
+
+    for node in &snapshot.nodes {
+        let page = page_for_rect(&node.rect, viewport_height, total_pages);
+        for field in searchable_fields(node) {
+            if !field.lower.contains(&needle) {
+                continue;
+            }
+            let context_source = if field.name == "text" {
+                normalize_text(&node.text)
+            } else {
+                field.value.clone()
+            };
+            let context_lower = if field.name == "text" {
+                context_source.to_lowercase()
+            } else {
+                field.lower.clone()
+            };
+            matches.push(SearchMatch {
+                page,
+                element_id: interactive_ids.get(&(page, node.ref_id.clone())).cloned(),
+                ref_id: node.ref_id.clone(),
+                tag: node.tag.clone(),
+                text: normalize_text(&node.text),
+                context: excerpt_around_match(&context_source, &context_lower, &needle),
+            });
+        }
+    }
+
+    matches.sort_by_key(|item| {
+        let interactive_boost = if item.element_id.is_some() { 0 } else { 1 };
+        let text_boost = if item.tag == "a" || item.tag == "button" || item.tag == "input" {
+            0
+        } else {
+            1
+        };
+        (
+            interactive_boost,
+            text_boost,
+            item.page,
+            item.ref_id.clone(),
+        )
+    });
+    matches.truncate(50);
+
+    SearchResults {
+        query: query.to_string(),
+        matches,
+    }
+}
+
+fn build_node<'a>(
+    raw: &'a RawNode,
+    children_by_parent: &HashMap<Option<&'a str>, Vec<&'a RawNode>>,
+    node_by_ref: &HashMap<&'a str, &'a RawNode>,
+    filter: &ViewFilter,
+    state: &mut BuildState,
+) -> Option<Node> {
+    let visible_here = intersects_page(&raw.rect, filter.page_top, filter.page_bottom);
+
+    if let Some(interactive) = classify_interactive(raw, node_by_ref) {
+        if !visible_here {
+            return None;
+        }
+        return Some(interactive_node(raw, interactive, state));
+    }
+
+    if let Some((level, text)) = classify_heading(raw) {
+        if !visible_here {
+            return None;
+        }
+        return Some(Node::Heading { level, text });
+    }
+
+    match raw.tag.as_str() {
+        "ul" | "ol" => {
+            let list = build_list_node(raw, children_by_parent, node_by_ref, filter, state)?;
+            return Some(list);
+        }
+        "table" => {
+            let table = build_table_node(raw, children_by_parent, node_by_ref, filter, state)?;
+            return Some(table);
+        }
+        _ => {}
+    }
+
+    let children = build_child_nodes(
+        raw.ref_id.as_str(),
+        children_by_parent,
+        node_by_ref,
+        filter,
+        state,
+    );
+
+    if !children.is_empty() {
+        if should_emit_container(raw, &children) {
+            return Some(Node::Container {
+                tag: raw.tag.clone(),
+                role: raw.attrs.get("role").cloned(),
+                children,
+            });
+        }
+        if children.len() == 1 {
+            return Some(children.into_iter().next().expect("single child"));
+        }
+        return Some(Node::Container {
+            tag: raw.tag.clone(),
+            role: raw.attrs.get("role").cloned(),
+            children,
+        });
+    }
+
+    if !visible_here {
+        return None;
+    }
+
+    let text = normalize_text(&raw.text);
+    if text.is_empty() {
+        return None;
+    }
+
+    Some(text_node(text, state))
+}
+
+fn build_child_nodes<'a>(
+    parent_ref: &'a str,
+    children_by_parent: &HashMap<Option<&'a str>, Vec<&'a RawNode>>,
+    node_by_ref: &HashMap<&'a str, &'a RawNode>,
+    filter: &ViewFilter,
+    state: &mut BuildState,
+) -> Vec<Node> {
+    let Some(children) = children_by_parent.get(&Some(parent_ref)) else {
+        return Vec::new();
+    };
+
+    let mut built = Vec::new();
+    for child in children {
+        if let Some(node) = build_node(child, children_by_parent, node_by_ref, filter, state) {
+            built.push(node);
+        }
+    }
+    built
+}
+
+fn build_list_node<'a>(
+    raw: &'a RawNode,
+    children_by_parent: &HashMap<Option<&'a str>, Vec<&'a RawNode>>,
+    node_by_ref: &HashMap<&'a str, &'a RawNode>,
+    filter: &ViewFilter,
+    state: &mut BuildState,
+) -> Option<Node> {
+    let items = collect_list_items(raw, children_by_parent, node_by_ref, filter, state);
+    if items.is_empty() {
+        return None;
+    }
+
+    let pages = paginate_block(&items, estimate_list_page_lines);
+    if pages.len() <= 1 {
+        let total_items = items.len();
+        return Some(Node::List {
+            id: None,
+            truncated: false,
+            shown: total_items,
+            total_items,
+            current_page: 1,
+            total_pages: 1,
+            children: items,
+        });
+    }
+
+    let block_id = format!("b{}", state.next_block_id);
+    state.next_block_id += 1;
+    let (current_page, total_pages, start, end) = first_block_page(&pages);
+    let page_items = items[start..end].to_vec();
+    state
+        .full_blocks
+        .insert(block_id.clone(), StoredBlock::List { items });
+
+    Some(Node::List {
+        id: Some(block_id),
+        truncated: true,
+        shown: end - start,
+        total_items: pages.last().map(|(_, end)| *end).unwrap_or(0),
+        current_page,
+        total_pages,
+        children: page_items,
+    })
+}
+
+fn collect_list_items<'a>(
+    raw: &'a RawNode,
+    children_by_parent: &HashMap<Option<&'a str>, Vec<&'a RawNode>>,
+    node_by_ref: &HashMap<&'a str, &'a RawNode>,
+    filter: &ViewFilter,
+    state: &mut BuildState,
+) -> Vec<Node> {
+    let mut items = Vec::new();
+    collect_list_items_recursive(
+        raw.ref_id.as_str(),
+        children_by_parent,
+        node_by_ref,
+        filter,
+        state,
+        &mut items,
+    );
+    items
+}
+
+fn collect_list_items_recursive<'a>(
+    parent_ref: &'a str,
+    children_by_parent: &HashMap<Option<&'a str>, Vec<&'a RawNode>>,
+    node_by_ref: &HashMap<&'a str, &'a RawNode>,
+    filter: &ViewFilter,
+    state: &mut BuildState,
+    items: &mut Vec<Node>,
+) {
+    let Some(children) = children_by_parent.get(&Some(parent_ref)) else {
+        return;
+    };
+
+    for child in children {
+        match child.tag.as_str() {
+            "li" => {
+                if let Some(item) =
+                    build_list_item(child, children_by_parent, node_by_ref, filter, state)
+                {
+                    items.push(item);
+                }
+            }
+            "div" | "section" | "article" => {
+                collect_list_items_recursive(
+                    child.ref_id.as_str(),
+                    children_by_parent,
+                    node_by_ref,
+                    filter,
+                    state,
+                    items,
+                );
+            }
+            _ => {}
+        }
+    }
+}
+
+fn build_list_item<'a>(
+    raw: &'a RawNode,
+    children_by_parent: &HashMap<Option<&'a str>, Vec<&'a RawNode>>,
+    node_by_ref: &HashMap<&'a str, &'a RawNode>,
+    filter: &ViewFilter,
+    state: &mut BuildState,
+) -> Option<Node> {
+    let visible_here = intersects_page(&raw.rect, filter.page_top, filter.page_bottom);
+    let mut children = build_child_nodes(
+        raw.ref_id.as_str(),
+        children_by_parent,
+        node_by_ref,
+        filter,
+        state,
+    );
+    if children.is_empty() && visible_here {
+        let text = normalize_text(&raw.text);
+        if !text.is_empty() {
+            children.push(text_node(text, state));
+        }
+    }
+    if children.is_empty() {
+        None
+    } else {
+        Some(Node::Item { children })
+    }
+}
+
+fn build_table_node<'a>(
+    raw: &'a RawNode,
+    children_by_parent: &HashMap<Option<&'a str>, Vec<&'a RawNode>>,
+    node_by_ref: &HashMap<&'a str, &'a RawNode>,
+    filter: &ViewFilter,
+    state: &mut BuildState,
+) -> Option<Node> {
+    let rows = collect_table_rows(raw, children_by_parent, node_by_ref, filter, state);
+    if rows.is_empty() {
+        return None;
+    }
+
+    let pages = paginate_block(&rows, estimate_table_page_lines);
+    if pages.len() <= 1 {
+        let total_items = rows.len();
+        return Some(Node::Table {
+            id: None,
+            truncated: false,
+            shown: total_items,
+            total_items,
+            current_page: 1,
+            total_pages: 1,
+            children: rows,
+        });
+    }
+
+    let block_id = format!("b{}", state.next_block_id);
+    state.next_block_id += 1;
+    let (current_page, total_pages, start, end) = first_block_page(&pages);
+    let page_rows = rows[start..end].to_vec();
+    let total_items = rows.len();
+    state
+        .full_blocks
+        .insert(block_id.clone(), StoredBlock::Table { rows });
+
+    Some(Node::Table {
+        id: Some(block_id),
+        truncated: true,
+        shown: end - start,
+        total_items,
+        current_page,
+        total_pages,
+        children: page_rows,
+    })
+}
+
+fn collect_table_rows<'a>(
+    raw: &'a RawNode,
+    children_by_parent: &HashMap<Option<&'a str>, Vec<&'a RawNode>>,
+    node_by_ref: &HashMap<&'a str, &'a RawNode>,
+    filter: &ViewFilter,
+    state: &mut BuildState,
+) -> Vec<Node> {
+    let mut rows = Vec::new();
+    collect_table_rows_recursive(
+        raw.ref_id.as_str(),
+        children_by_parent,
+        node_by_ref,
+        filter,
+        state,
+        &mut rows,
+    );
+    rows
+}
+
+fn collect_table_rows_recursive<'a>(
+    parent_ref: &'a str,
+    children_by_parent: &HashMap<Option<&'a str>, Vec<&'a RawNode>>,
+    node_by_ref: &HashMap<&'a str, &'a RawNode>,
+    filter: &ViewFilter,
+    state: &mut BuildState,
+    rows: &mut Vec<Node>,
+) {
+    let Some(children) = children_by_parent.get(&Some(parent_ref)) else {
+        return;
+    };
+
+    for child in children {
+        match child.tag.as_str() {
+            "tr" => {
+                if let Some(row) =
+                    build_table_row(child, children_by_parent, node_by_ref, filter, state)
+                {
+                    rows.push(row);
+                }
+            }
+            "tbody" | "thead" | "tfoot" | "div" => {
+                collect_table_rows_recursive(
+                    child.ref_id.as_str(),
+                    children_by_parent,
+                    node_by_ref,
+                    filter,
+                    state,
+                    rows,
+                );
+            }
+            _ => {}
+        }
+    }
+}
+
+fn build_table_row<'a>(
+    raw: &'a RawNode,
+    children_by_parent: &HashMap<Option<&'a str>, Vec<&'a RawNode>>,
+    node_by_ref: &HashMap<&'a str, &'a RawNode>,
+    filter: &ViewFilter,
+    state: &mut BuildState,
+) -> Option<Node> {
+    let visible_here = intersects_page(&raw.rect, filter.page_top, filter.page_bottom);
+    let Some(children) = children_by_parent.get(&Some(raw.ref_id.as_str())) else {
+        return None;
+    };
+
+    let mut cells = Vec::new();
+    for child in children {
+        if !matches!(child.tag.as_str(), "td" | "th") {
+            continue;
+        }
+        if let Some(cell) = build_table_cell(child, children_by_parent, node_by_ref, filter, state)
+        {
+            cells.push(cell);
+        }
+    }
+
+    if cells.is_empty() && !visible_here {
+        None
+    } else {
+        Some(Node::Row { children: cells })
+    }
+}
+
+fn build_table_cell<'a>(
+    raw: &'a RawNode,
+    children_by_parent: &HashMap<Option<&'a str>, Vec<&'a RawNode>>,
+    node_by_ref: &HashMap<&'a str, &'a RawNode>,
+    filter: &ViewFilter,
+    state: &mut BuildState,
+) -> Option<Node> {
+    let visible_here = intersects_page(&raw.rect, filter.page_top, filter.page_bottom);
+    let mut children = build_child_nodes(
+        raw.ref_id.as_str(),
+        children_by_parent,
+        node_by_ref,
+        filter,
+        state,
+    );
+    if children.is_empty() && visible_here {
+        let text = normalize_text(&raw.text);
+        if !text.is_empty() {
+            children.push(text_node(text, state));
+        }
+    }
+    if children.is_empty() {
+        None
+    } else {
+        Some(Node::Cell { children })
+    }
+}
+
+fn interactive_node(raw: &RawNode, interactive: InteractiveKind, state: &mut BuildState) -> Node {
+    let id = format!("e{}", state.next_element_id);
+    state.next_element_id += 1;
+    state.element_refs.insert(id.clone(), raw.ref_id.clone());
+
+    match interactive {
+        InteractiveKind::Link { text, href } => Node::Link { id, text, href },
+        InteractiveKind::Button { text } => Node::Button { id, text },
+        InteractiveKind::Input {
+            text,
+            input_type,
+            placeholder,
+            value,
+            disabled,
+        } => Node::Input {
+            id,
+            input_type,
+            placeholder,
+            value: value.or(if text.is_empty() { None } else { Some(text) }),
+            disabled,
+        },
+        InteractiveKind::Checkbox { text, checked } => Node::Checkbox { id, text, checked },
+        InteractiveKind::Radio {
+            text,
+            name,
+            selected,
+        } => Node::Radio {
+            id,
+            text,
+            name,
+            selected,
+        },
+        InteractiveKind::Select {
+            text,
+            selected,
+            disabled,
+        } => Node::Select {
+            id,
+            text,
+            selected,
+            disabled,
+        },
+        InteractiveKind::Textarea {
+            text,
+            placeholder,
+            disabled,
+        } => Node::Textarea {
+            id,
+            text,
+            placeholder,
+            disabled,
+        },
+    }
+}
+
+fn text_node(text: String, state: &mut BuildState) -> Node {
+    let truncated = truncate_text(&text, MAX_TEXT_LEN);
+    let text_id = if truncated != text {
+        let id = format!("t{}", state.next_text_id);
+        state.next_text_id += 1;
+        state.full_texts.insert(id.clone(), text);
+        Some(id)
+    } else {
+        None
+    };
+
+    Node::Text {
+        id: text_id,
+        text: truncated,
+    }
+}
+
+fn root_refs(snapshot: &RawSnapshot) -> Vec<String> {
+    snapshot
+        .nodes
+        .iter()
+        .filter(|node| node.parent.is_none())
+        .map(|node| node.ref_id.clone())
+        .collect()
+}
+
+fn build_children_map<'a>(snapshot: &'a RawSnapshot) -> HashMap<Option<&'a str>, Vec<&'a RawNode>> {
+    let mut map: HashMap<Option<&str>, Vec<&RawNode>> = HashMap::new();
+    for node in &snapshot.nodes {
+        map.entry(node.parent.as_deref()).or_default().push(node);
+    }
+    map
 }
 
 fn classify_interactive<'a>(
@@ -744,18 +1213,103 @@ fn is_interactive_tag(tag: &str, attrs: &HashMap<String, String>) -> bool {
         || attrs.contains_key("onclick")
 }
 
-fn should_emit_text(
-    node: &RawNode,
-    normalized_text: &str,
-    child_count: &HashMap<&str, usize>,
-) -> bool {
-    if is_interactive_tag(node.tag.as_str(), &node.attrs) {
-        return false;
+fn should_emit_container(raw: &RawNode, children: &[Node]) -> bool {
+    if raw.attrs.contains_key("role") {
+        return true;
     }
-    if child_count.contains_key(node.ref_id.as_str()) {
-        return false;
+    if matches!(
+        raw.tag.as_str(),
+        "section"
+            | "article"
+            | "nav"
+            | "main"
+            | "header"
+            | "footer"
+            | "aside"
+            | "form"
+            | "dialog"
+            | "fieldset"
+            | "details"
+            | "summary"
+    ) {
+        return true;
     }
-    !normalized_text.is_empty()
+    if matches!(raw.tag.as_str(), "div" | "span") {
+        return children.len() > 1;
+    }
+    !children.is_empty()
+}
+
+fn searchable_fields(node: &RawNode) -> Vec<SearchField<'_>> {
+    let mut fields = Vec::new();
+    let text = normalize_text(&node.text);
+    if !text.is_empty() {
+        fields.push(SearchField {
+            name: "text",
+            lower: text.to_lowercase(),
+            value: text,
+        });
+    }
+    for attr in [
+        "href",
+        "placeholder",
+        "value",
+        "aria-label",
+        "name",
+        "title",
+    ] {
+        if let Some(value) = node.attrs.get(attr) {
+            let normalized = normalize_text(value);
+            if normalized.is_empty() {
+                continue;
+            }
+            fields.push(SearchField {
+                name: attr,
+                lower: normalized.to_lowercase(),
+                value: normalized,
+            });
+        }
+    }
+    fields
+}
+
+#[derive(Debug, Clone)]
+struct SearchField<'a> {
+    name: &'a str,
+    lower: String,
+    value: String,
+}
+
+fn interactive_ids_by_ref(
+    snapshot: &RawSnapshot,
+    total_pages: u32,
+) -> HashMap<(u32, String), String> {
+    let mut ids = HashMap::new();
+    for page in 1..=total_pages.max(1) {
+        if let Ok(page_data) = parse_page_from_snapshot(snapshot, Some(page)) {
+            for (element_id, ref_id) in page_data.element_refs {
+                ids.insert((page, ref_id), element_id);
+            }
+        }
+    }
+    ids
+}
+
+fn page_for_rect(rect: &Rect, viewport_height: f64, total_pages: u32) -> u32 {
+    ((rect.y / viewport_height).floor() as u32 + 1).clamp(1, total_pages.max(1))
+}
+
+fn element_label(node: &RawNode) -> String {
+    let text = normalize_text(&node.text);
+    if !text.is_empty() {
+        return text;
+    }
+    node.attrs
+        .get("aria-label")
+        .or_else(|| node.attrs.get("title"))
+        .or_else(|| node.attrs.get("placeholder"))
+        .cloned()
+        .unwrap_or_default()
 }
 
 fn normalize_text(text: &str) -> String {
@@ -771,191 +1325,120 @@ fn excerpt_around_match(text: &str, lower: &str, needle: &str) -> String {
     truncate_text(text[start..end].trim(), MAX_TEXT_LEN)
 }
 
-fn flush_pending_text(
-    pending: &mut Option<PendingText>,
-    processed: &mut Vec<ProcessedNode>,
-    next_text_id: &mut usize,
-) {
-    let Some(pending) = pending.take() else {
-        return;
-    };
-
-    let full_text = pending.text;
-    let truncated = truncate_text(&full_text, MAX_TEXT_LEN);
-    let text_id = if truncated != full_text {
-        let id = format!("t{}", *next_text_id);
-        *next_text_id += 1;
-        Some(id)
-    } else {
-        None
-    };
-    let full_text_pair = text_id.clone().map(|id| (id, full_text.clone()));
-
-    processed.push(ProcessedNode {
-        order: pending.order,
-        interactive: false,
-        element: Element::Text {
-            id: text_id,
-            text: truncated,
-        },
-        ref_id: None,
-        full_text: full_text_pair,
-        full_block: None,
-    });
+fn intersects_page(rect: &Rect, page_top: f64, page_bottom: f64) -> bool {
+    let rect_top = rect.y;
+    let rect_bottom = rect.y + rect.h;
+    rect_bottom > page_top && rect_top < page_bottom
 }
 
-fn truncate_processed(mut processed: Vec<ProcessedNode>) -> Vec<ProcessedNode> {
-    processed.sort_by_key(|node| node.order);
-
-    let mut selected = Vec::with_capacity(MAX_PAGE_ELEMENTS);
-    let mut remaining = Vec::new();
-
-    for node in processed {
-        if node.interactive && selected.len() < MAX_PAGE_ELEMENTS {
-            selected.push(node);
-        } else {
-            remaining.push(node);
-        }
-    }
-
-    for node in remaining {
-        if selected.len() >= MAX_PAGE_ELEMENTS {
-            break;
-        }
-        selected.push(node);
-    }
-
-    selected.sort_by_key(|node| node.order);
-    selected
-}
-
-fn extract_element_id(element: &Element) -> String {
-    match element {
-        Element::Link { id, .. }
-        | Element::Button { id, .. }
-        | Element::Input { id, .. }
-        | Element::Checkbox { id, .. }
-        | Element::Radio { id, .. }
-        | Element::Select { id, .. }
-        | Element::Textarea { id, .. } => id.clone(),
-        Element::Text { .. }
-        | Element::Heading { .. }
-        | Element::List { .. }
-        | Element::Table { .. } => String::new(),
-    }
-}
-
-fn build_list_element(
-    items: Vec<String>,
-    next_block_id: &mut usize,
-) -> (Element, Option<(String, StoredBlock)>) {
-    let pages = list_page_ranges(&items);
-    if pages.len() <= 1 {
-        let total_items = items.len();
-        return (
-            Element::List {
-                id: None,
-                items,
-                truncated: false,
-                shown: total_items,
-                total_items,
-                current_page: 1,
-                total_pages: 1,
-            },
-            None,
-        );
-    }
-
-    let block_id = format!("b{}", *next_block_id);
-    *next_block_id += 1;
-    let (current_page, total_pages, start, end) = first_block_page(&pages);
-    let page_items = items[start..end].to_vec();
-    (
-        Element::List {
-            id: Some(block_id.clone()),
-            items: page_items,
-            truncated: true,
-            shown: end - start,
-            total_items: items.len(),
-            current_page,
-            total_pages,
-        },
-        Some((block_id, StoredBlock::List { items })),
+fn is_trueish(value: Option<&String>) -> bool {
+    matches!(
+        value.map(String::as_str),
+        Some("true" | "checked" | "disabled" | "selected" | "1" | "")
     )
 }
 
-fn build_table_element(
-    rows: Vec<Vec<String>>,
-    next_block_id: &mut usize,
-) -> (Element, Option<(String, StoredBlock)>) {
-    let pages = table_page_ranges(&rows);
-    if pages.len() <= 1 {
-        let total_items = rows.len();
-        return (
-            Element::Table {
-                id: None,
-                rows,
-                truncated: false,
-                shown: total_items,
-                total_items,
-                current_page: 1,
-                total_pages: 1,
-            },
-            None,
-        );
-    }
-
-    let block_id = format!("b{}", *next_block_id);
-    *next_block_id += 1;
-    let (current_page, total_pages, start, end) = first_block_page(&pages);
-    let page_rows = rows[start..end].to_vec();
-    (
-        Element::Table {
-            id: Some(block_id.clone()),
-            rows: page_rows,
-            truncated: true,
-            shown: end - start,
-            total_items: rows.len(),
-            current_page,
-            total_pages,
-        },
-        Some((block_id, StoredBlock::Table { rows })),
-    )
+fn count_nodes(nodes: &[Node]) -> usize {
+    nodes.iter().map(count_node).sum()
 }
 
-impl StoredBlock {
-    fn resolve(&self, block_id: &str, requested_page: Option<u32>) -> BlockData {
-        match self {
-            Self::List { items } => {
-                let pages = list_page_ranges(items);
-                let (current_page, total_pages, start, end) =
-                    selected_block_page(&pages, requested_page);
-                BlockData::List {
-                    id: block_id.to_string(),
-                    items: items[start..end].to_vec(),
-                    truncated: total_pages > 1,
-                    shown: end - start,
-                    total_items: items.len(),
-                    current_page,
-                    total_pages,
-                }
-            }
-            Self::Table { rows } => {
-                let pages = table_page_ranges(rows);
-                let (current_page, total_pages, start, end) =
-                    selected_block_page(&pages, requested_page);
-                BlockData::Table {
-                    id: block_id.to_string(),
-                    rows: rows[start..end].to_vec(),
-                    truncated: total_pages > 1,
-                    shown: end - start,
-                    total_items: rows.len(),
-                    current_page,
-                    total_pages,
-                }
+fn count_node(node: &Node) -> usize {
+    1 + match node {
+        Node::Container { children, .. }
+        | Node::List { children, .. }
+        | Node::Item { children }
+        | Node::Table { children, .. }
+        | Node::Row { children }
+        | Node::Cell { children } => count_nodes(children),
+        _ => 0,
+    }
+}
+
+fn estimate_list_page_lines(items: &[Node]) -> usize {
+    2 + items.iter().map(estimate_item_lines).sum::<usize>()
+}
+
+fn estimate_item_lines(item: &Node) -> usize {
+    match item {
+        Node::Item { children } => 1 + children.iter().map(estimate_node_lines).sum::<usize>(),
+        other => estimate_node_lines(other),
+    }
+}
+
+fn estimate_table_page_lines(rows: &[Node]) -> usize {
+    2 + rows.iter().map(estimate_row_lines).sum::<usize>()
+}
+
+fn estimate_row_lines(row: &Node) -> usize {
+    match row {
+        Node::Row { children } => 2 + children.iter().map(estimate_cell_lines).sum::<usize>(),
+        other => estimate_node_lines(other),
+    }
+}
+
+fn estimate_cell_lines(cell: &Node) -> usize {
+    match cell {
+        Node::Cell { children } => {
+            if children.len() == 1 && matches!(children[0], Node::Text { .. }) {
+                1
+            } else {
+                2 + children.iter().map(estimate_node_lines).sum::<usize>()
             }
         }
+        other => estimate_node_lines(other),
     }
+}
+
+fn estimate_node_lines(node: &Node) -> usize {
+    match node {
+        Node::Text { .. }
+        | Node::Heading { .. }
+        | Node::Link { .. }
+        | Node::Button { .. }
+        | Node::Input { .. }
+        | Node::Checkbox { .. }
+        | Node::Radio { .. }
+        | Node::Select { .. }
+        | Node::Textarea { .. } => 1,
+        Node::Container { children, .. }
+        | Node::List { children, .. }
+        | Node::Item { children }
+        | Node::Table { children, .. }
+        | Node::Row { children }
+        | Node::Cell { children } => 2 + children.iter().map(estimate_node_lines).sum::<usize>(),
+    }
+}
+
+fn paginate_block<T: Clone>(
+    items: &[T],
+    rendered_lines_for_range: impl Fn(&[T]) -> usize,
+) -> Vec<(usize, usize)> {
+    if items.is_empty() {
+        return Vec::new();
+    }
+
+    let mut pages = Vec::new();
+    let mut start = 0usize;
+
+    while start < items.len() {
+        let mut end = start;
+        while end < items.len() {
+            let candidate_end = end + 1;
+            let lines = rendered_lines_for_range(&items[start..candidate_end]);
+            if lines <= MAX_BLOCK_RENDER_LINES || end == start {
+                end = candidate_end;
+                if lines > MAX_BLOCK_RENDER_LINES {
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+        pages.push((start, end));
+        start = end;
+    }
+
+    pages
 }
 
 fn first_block_page(pages: &[(usize, usize)]) -> (u32, u32, usize, usize) {
@@ -975,226 +1458,61 @@ fn selected_block_page(
     (current_page, total_pages, start, end)
 }
 
-fn list_page_ranges(items: &[String]) -> Vec<(usize, usize)> {
-    paginate_by_render_budget(items.len(), |start, end| list_rendered_lines(end - start))
-}
-
-fn table_page_ranges(rows: &[Vec<String>]) -> Vec<(usize, usize)> {
-    paginate_by_render_budget(rows.len(), |start, end| {
-        2 + rows[start..end]
-            .iter()
-            .map(|row| rendered_table_row_lines(row, 4))
-            .sum::<usize>()
-    })
-}
-
-fn list_rendered_lines(item_count: usize) -> usize {
-    if item_count == 0 { 0 } else { item_count + 2 }
-}
-
-fn paginate_by_render_budget(
-    total_items: usize,
-    rendered_lines_for_range: impl Fn(usize, usize) -> usize,
-) -> Vec<(usize, usize)> {
-    if total_items == 0 {
-        return Vec::new();
+impl StoredBlock {
+    fn resolve_all(&self, block_id: &str) -> BlockData {
+        match self {
+            Self::List { items } => BlockData::List {
+                id: block_id.to_string(),
+                truncated: false,
+                shown: items.len(),
+                total_items: items.len(),
+                current_page: 1,
+                total_pages: 1,
+                children: items.clone(),
+            },
+            Self::Table { rows } => BlockData::Table {
+                id: block_id.to_string(),
+                truncated: false,
+                shown: rows.len(),
+                total_items: rows.len(),
+                current_page: 1,
+                total_pages: 1,
+                children: rows.clone(),
+            },
+        }
     }
 
-    let mut pages = Vec::new();
-    let mut start = 0usize;
-
-    while start < total_items {
-        let mut end = start;
-        while end < total_items {
-            let candidate_end = end + 1;
-            let lines = rendered_lines_for_range(start, candidate_end);
-            if lines <= MAX_BLOCK_RENDER_LINES || end == start {
-                end = candidate_end;
-                if lines > MAX_BLOCK_RENDER_LINES {
-                    break;
+    fn resolve(&self, block_id: &str, requested_page: Option<u32>) -> BlockData {
+        match self {
+            Self::List { items } => {
+                let pages = paginate_block(items, estimate_list_page_lines);
+                let (current_page, total_pages, start, end) =
+                    selected_block_page(&pages, requested_page);
+                BlockData::List {
+                    id: block_id.to_string(),
+                    truncated: total_pages > 1,
+                    shown: end - start,
+                    total_items: items.len(),
+                    current_page,
+                    total_pages,
+                    children: items[start..end].to_vec(),
                 }
-            } else {
-                break;
             }
-        }
-        pages.push((start, end));
-        start = end;
-    }
-
-    pages
-}
-
-fn element_label(node: &RawNode) -> String {
-    let text = normalize_text(&node.text);
-    if !text.is_empty() {
-        return text;
-    }
-    node.attrs
-        .get("aria-label")
-        .or_else(|| node.attrs.get("title"))
-        .or_else(|| node.attrs.get("placeholder"))
-        .cloned()
-        .unwrap_or_default()
-}
-
-fn merge_rect(a: &Rect, b: &Rect) -> Rect {
-    let left = a.x.min(b.x);
-    let top = a.y.min(b.y);
-    let right = (a.x + a.w).max(b.x + b.w);
-    let bottom = (a.y + a.h).max(b.y + b.h);
-    Rect {
-        x: left,
-        y: top,
-        w: right - left,
-        h: bottom - top,
-    }
-}
-
-fn intersects_page(rect: &Rect, page_top: f64, page_bottom: f64) -> bool {
-    let rect_top = rect.y;
-    let rect_bottom = rect.y + rect.h;
-    rect_bottom > page_top && rect_top < page_bottom
-}
-
-fn is_trueish(value: Option<&String>) -> bool {
-    matches!(
-        value.map(String::as_str),
-        Some("true" | "checked" | "disabled" | "selected" | "1" | "")
-    )
-}
-
-fn collect_list_items<'a>(
-    container_ref: &str,
-    children_by_parent: &HashMap<&'a str, Vec<&'a RawNode>>,
-    consumed: &mut HashSet<&'a str>,
-) -> Vec<String> {
-    let mut items = Vec::new();
-    let Some(children) = children_by_parent.get(container_ref) else {
-        return items;
-    };
-    for child in children {
-        if child.tag == "li" {
-            if li_is_interactive_only(child, children_by_parent) {
-                continue;
-            }
-            let text = normalize_text(&child.text);
-            if !text.is_empty() {
-                items.push(text);
-            }
-            consumed.insert(child.ref_id.as_str());
-            mark_descendants_consumed(&child.ref_id, children_by_parent, consumed);
-        }
-    }
-    items
-}
-
-fn li_is_interactive_only<'a>(
-    li: &'a RawNode,
-    children_by_parent: &HashMap<&'a str, Vec<&'a RawNode>>,
-) -> bool {
-    if is_interactive_tag(li.tag.as_str(), &li.attrs) {
-        return true;
-    }
-
-    let li_text = normalize_text(&li.text);
-    if li_text.is_empty() {
-        return false;
-    }
-
-    let mut labels = Vec::new();
-    collect_interactive_root_labels(&li.ref_id, children_by_parent, &mut labels);
-
-    if labels.is_empty() {
-        return false;
-    }
-
-    normalize_text(&labels.join(" ")) == li_text
-}
-
-fn collect_interactive_root_labels<'a>(
-    parent_ref: &str,
-    children_by_parent: &HashMap<&'a str, Vec<&'a RawNode>>,
-    out: &mut Vec<String>,
-) {
-    let Some(children) = children_by_parent.get(parent_ref) else {
-        return;
-    };
-    for child in children {
-        if is_interactive_tag(child.tag.as_str(), &child.attrs) {
-            let label = element_label(child);
-            if !label.is_empty() {
-                out.push(label);
-            }
-            continue;
-        }
-        collect_interactive_root_labels(&child.ref_id, children_by_parent, out);
-    }
-}
-
-fn collect_table_rows<'a>(
-    table_ref: &str,
-    children_by_parent: &HashMap<&'a str, Vec<&'a RawNode>>,
-    consumed: &mut HashSet<&'a str>,
-) -> Vec<Vec<String>> {
-    let mut rows = Vec::new();
-    collect_tr_nodes(table_ref, children_by_parent, consumed, &mut rows);
-    rows
-}
-
-fn collect_tr_nodes<'a>(
-    parent_ref: &str,
-    children_by_parent: &HashMap<&'a str, Vec<&'a RawNode>>,
-    consumed: &mut HashSet<&'a str>,
-    rows: &mut Vec<Vec<String>>,
-) {
-    let Some(children) = children_by_parent.get(parent_ref) else {
-        return;
-    };
-    for child in children {
-        match child.tag.as_str() {
-            "tr" => {
-                let cells = collect_row_cells(&child.ref_id, children_by_parent);
-                if !cells.is_empty() {
-                    rows.push(cells);
+            Self::Table { rows } => {
+                let pages = paginate_block(rows, estimate_table_page_lines);
+                let (current_page, total_pages, start, end) =
+                    selected_block_page(&pages, requested_page);
+                BlockData::Table {
+                    id: block_id.to_string(),
+                    truncated: total_pages > 1,
+                    shown: end - start,
+                    total_items: rows.len(),
+                    current_page,
+                    total_pages,
+                    children: rows[start..end].to_vec(),
                 }
-                consumed.insert(child.ref_id.as_str());
-                mark_descendants_consumed(&child.ref_id, children_by_parent, consumed);
             }
-            "tbody" | "thead" | "tfoot" => {
-                consumed.insert(child.ref_id.as_str());
-                collect_tr_nodes(&child.ref_id, children_by_parent, consumed, rows);
-            }
-            _ => {}
         }
-    }
-}
-
-fn collect_row_cells<'a>(
-    tr_ref: &str,
-    children_by_parent: &HashMap<&'a str, Vec<&'a RawNode>>,
-) -> Vec<String> {
-    let Some(children) = children_by_parent.get(tr_ref) else {
-        return Vec::new();
-    };
-    children
-        .iter()
-        .filter(|c| matches!(c.tag.as_str(), "td" | "th"))
-        .map(|c| normalize_text(&c.text))
-        .filter(|t| !t.is_empty())
-        .collect()
-}
-
-fn mark_descendants_consumed<'a>(
-    node_ref: &str,
-    children_by_parent: &HashMap<&'a str, Vec<&'a RawNode>>,
-    consumed: &mut HashSet<&'a str>,
-) {
-    let Some(children) = children_by_parent.get(node_ref) else {
-        return;
-    };
-    for child in children {
-        consumed.insert(child.ref_id.as_str());
-        mark_descendants_consumed(&child.ref_id, children_by_parent, consumed);
     }
 }
 
@@ -1236,366 +1554,133 @@ mod tests {
     }
 
     #[test]
-    fn parse_page_builds_interactive_ids_and_text_ids() {
-        let mut link = node("r1", None, "a", "Sign In", 20.0);
-        link.attrs.insert("href".into(), "/login".into());
+    fn parse_page_builds_tree_and_assigns_text_ids() {
+        let body = node("r1", None, "body", "", 0.0);
+        let h1 = node("r2", Some("r1"), "h1", "Welcome", 10.0);
         let text = node(
-            "r2",
-            None,
+            "r3",
+            Some("r1"),
             "div",
             "This is a long paragraph that should be truncated because it is far beyond the two hundred character limit used by the CLI rendering layer. The full text should still be available from the hidden text store for the text command.",
-            60.0,
+            40.0,
         );
-        let page = parse_page_from_snapshot(&snapshot(vec![link, text]), Some(1)).unwrap();
 
-        assert_eq!(page.current_page, 1);
-        assert_eq!(page.total_pages, 2);
-        assert_eq!(page.element_refs.get("e1").map(String::as_str), Some("r1"));
+        let page = parse_page_from_snapshot(&snapshot(vec![body, h1, text]), Some(1)).unwrap();
+        assert_eq!(page.nodes.len(), 2);
+        assert!(matches!(page.nodes[0], Node::Heading { .. }));
+        match &page.nodes[1] {
+            Node::Text { id, .. } => assert_eq!(id.as_deref(), Some("t1")),
+            other => panic!("unexpected: {other:?}"),
+        }
         assert!(page.full_texts.contains_key("t1"));
     }
 
     #[test]
-    fn parse_page_skips_parent_text_when_children_exist() {
-        let parent = node("r1", None, "div", "Hello World", 10.0);
-        let child = node("r2", Some("r1"), "span", "Hello World", 10.0);
-        let page = parse_page_from_snapshot(&snapshot(vec![parent, child]), Some(1)).unwrap();
+    fn parse_page_keeps_container_context() {
+        let body = node("r1", None, "body", "", 0.0);
+        let section = node("r2", Some("r1"), "section", "", 10.0);
+        let text = node("r3", Some("r2"), "span", "Alpha", 10.0);
+        let mut link = node("r4", Some("r2"), "a", "Docs", 30.0);
+        link.attrs.insert("href".into(), "/docs".into());
 
-        assert_eq!(page.elements.len(), 1);
-        match &page.elements[0] {
-            Element::Text { text, .. } => assert_eq!(text, "Hello World"),
-            other => panic!("unexpected element: {other:?}"),
+        let page =
+            parse_page_from_snapshot(&snapshot(vec![body, section, text, link]), Some(1)).unwrap();
+
+        match &page.nodes[0] {
+            Node::Container { tag, children, .. } => {
+                assert_eq!(tag, "section");
+                assert_eq!(children.len(), 2);
+                assert!(matches!(children[1], Node::Link { .. }));
+            }
+            other => panic!("unexpected: {other:?}"),
         }
     }
 
     #[test]
-    fn parse_page_does_not_emit_child_text_for_interactive_ancestors() {
-        let button = node("r1", None, "button", "Type / to search", 10.0);
-        let child = node("r2", Some("r1"), "span", "/", 10.0);
-        let page = parse_page_from_snapshot(&snapshot(vec![button, child]), Some(1)).unwrap();
+    fn table_keeps_nested_link_and_mapping() {
+        let body = node("r1", None, "body", "", 0.0);
+        let table = node("r2", Some("r1"), "table", "", 10.0);
+        let tbody = node("r3", Some("r2"), "tbody", "", 10.0);
+        let tr = node("r4", Some("r3"), "tr", "", 10.0);
+        let td_rank = node("r5", Some("r4"), "td", "1", 10.0);
+        let td_name = node("r6", Some("r4"), "td", "Red Desert", 10.0);
+        let mut link = node("r7", Some("r6"), "a", "Red Desert", 10.0);
+        link.attrs.insert("href".into(), "/app/1".into());
 
-        assert_eq!(page.elements.len(), 1);
-        match &page.elements[0] {
-            Element::Button { text, .. } => assert_eq!(text, "Type / to search"),
-            other => panic!("unexpected element: {other:?}"),
+        let page = parse_page_from_snapshot(
+            &snapshot(vec![body, table, tbody, tr, td_rank, td_name, link]),
+            Some(1),
+        )
+        .unwrap();
+
+        match &page.nodes[0] {
+            Node::Table { children, .. } => match &children[0] {
+                Node::Row { children } => match &children[1] {
+                    Node::Cell { children } => match &children[0] {
+                        Node::Link { id, text, href } => {
+                            assert_eq!(id, "e1");
+                            assert_eq!(text, "Red Desert");
+                            assert_eq!(href.as_deref(), Some("/app/1"));
+                        }
+                        other => panic!("unexpected: {other:?}"),
+                    },
+                    other => panic!("unexpected cell: {other:?}"),
+                },
+                other => panic!("unexpected row: {other:?}"),
+            },
+            other => panic!("unexpected table: {other:?}"),
         }
+        assert_eq!(page.element_refs.get("e1").map(String::as_str), Some("r7"));
     }
 
     #[test]
-    fn truncate_text_uses_explicit_marker() {
-        let input = "a".repeat(MAX_TEXT_LEN + 5);
-        let truncated = truncate_text(&input, MAX_TEXT_LEN);
-        assert!(truncated.ends_with("[...truncated]"));
-    }
-
-    #[test]
-    fn parse_page_assigns_block_ids_for_long_lists() {
-        let list = node("r1", None, "ul", "", 10.0);
-        let mut nodes = vec![list];
+    fn long_list_assigns_block_ids() {
+        let body = node("r1", None, "body", "", 0.0);
+        let ul = node("r2", Some("r1"), "ul", "", 10.0);
+        let mut nodes = vec![body, ul];
         for index in 0..25 {
             nodes.push(node(
-                &format!("r{}", index + 2),
-                Some("r1"),
+                &format!("r{}", index + 3),
+                Some("r2"),
                 "li",
                 &format!("Item {}", index + 1),
-                10.0 + index as f64 * 20.0,
+                20.0 + index as f64 * 10.0,
             ));
         }
 
         let page = parse_page_from_snapshot(&snapshot(nodes), Some(1)).unwrap();
-        let block_id = match &page.elements[0] {
-            Element::List {
-                id,
-                items,
-                truncated,
-                shown,
-                total_items,
-                current_page,
-                total_pages,
-            } => {
-                assert_eq!(id.as_deref(), Some("b1"));
-                assert_eq!(items.len(), 18);
+        let block_id = match &page.nodes[0] {
+            Node::List { id, truncated, .. } => {
                 assert!(*truncated);
-                assert_eq!(*shown, 18);
-                assert_eq!(*total_items, 25);
-                assert_eq!(*current_page, 1);
-                assert_eq!(*total_pages, 2);
-                id.clone().unwrap()
+                id.clone().expect("block id")
             }
-            other => panic!("unexpected element: {other:?}"),
+            other => panic!("unexpected: {other:?}"),
         };
 
         let block = resolve_block(&page, &block_id, Some(2)).unwrap();
         match block {
-            BlockData::List {
-                items,
-                current_page,
-                total_pages,
-                shown,
-                total_items,
-                ..
-            } => {
-                assert_eq!(current_page, 2);
-                assert_eq!(total_pages, 2);
-                assert_eq!(shown, 7);
-                assert_eq!(total_items, 25);
-                assert_eq!(items.first().map(String::as_str), Some("Item 19"));
-            }
-            other => panic!("unexpected block: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn parse_page_assigns_block_ids_for_long_tables() {
-        let table = node("r1", None, "table", "", 10.0);
-        let mut nodes = vec![table];
-        for index in 0..23 {
-            let tr_ref = format!("tr{}", index + 1);
-            let td_ref = format!("td{}", index + 1);
-            nodes.push(node(
-                &tr_ref,
-                Some("r1"),
-                "tr",
-                "",
-                10.0 + index as f64 * 20.0,
-            ));
-            nodes.push(node(
-                &td_ref,
-                Some(&tr_ref),
-                "td",
-                &format!("Row {}", index + 1),
-                10.0 + index as f64 * 20.0,
-            ));
-        }
-
-        let page = parse_page_from_snapshot(&snapshot(nodes), Some(1)).unwrap();
-        match &page.elements[0] {
-            Element::Table {
-                id,
-                rows,
-                truncated,
-                shown,
-                total_items,
-                current_page,
-                total_pages,
-            } => {
-                assert_eq!(id.as_deref(), Some("b1"));
-                assert_eq!(rows.len(), 18);
-                assert!(*truncated);
-                assert_eq!(*shown, 18);
-                assert_eq!(*total_items, 23);
-                assert_eq!(*current_page, 1);
-                assert_eq!(*total_pages, 2);
-            }
-            other => panic!("unexpected element: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn parse_page_uses_expanded_table_row_lines_for_pagination() {
-        let table = node("r1", None, "table", "", 10.0);
-        let mut nodes = vec![table];
-        for index in 0..7 {
-            let tr_ref = format!("tr{}", index + 1);
-            let td_ref = format!("td{}", index + 1);
-            nodes.push(node(
-                &tr_ref,
-                Some("r1"),
-                "tr",
-                "",
-                10.0 + index as f64 * 20.0,
-            ));
-            nodes.push(node(
-                &td_ref,
-                Some(&tr_ref),
-                "td",
-                &"x".repeat(200),
-                10.0 + index as f64 * 20.0,
-            ));
-        }
-
-        let page = parse_page_from_snapshot(&snapshot(nodes), Some(1)).unwrap();
-        let block_id = match &page.elements[0] {
-            Element::Table {
-                id,
-                rows,
-                truncated,
-                shown,
-                total_items,
-                current_page,
-                total_pages,
-            } => {
-                assert_eq!(id.as_deref(), Some("b1"));
-                assert_eq!(rows.len(), 6);
-                assert!(*truncated);
-                assert_eq!(*shown, 6);
-                assert_eq!(*total_items, 7);
-                assert_eq!(*current_page, 1);
-                assert_eq!(*total_pages, 2);
-                id.clone().unwrap()
-            }
-            other => panic!("unexpected element: {other:?}"),
-        };
-
-        let block = resolve_block(&page, &block_id, Some(2)).unwrap();
-        match block {
-            BlockData::Table {
-                rows,
-                current_page,
-                total_pages,
-                shown,
-                total_items,
-                ..
-            } => {
-                assert_eq!(current_page, 2);
-                assert_eq!(total_pages, 2);
-                assert_eq!(rows.len(), 1);
-                assert_eq!(shown, 1);
-                assert_eq!(total_items, 7);
-            }
-            other => panic!("unexpected block: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn search_snapshot_finds_matches() {
-        let snap = snapshot(vec![node(
-            "r1",
-            None,
-            "div",
-            "Rust browser automation",
-            10.0,
-        )]);
-        let result = search_snapshot(&snap, "browser");
-        assert_eq!(result.matches.len(), 1);
-        assert_eq!(result.matches[0].page, 1);
-        assert_eq!(result.matches[0].element_id, None);
-        assert_eq!(result.matches[0].ref_id, "r1");
-    }
-
-    #[test]
-    fn search_snapshot_returns_element_ids_for_interactive_matches() {
-        let mut button = node("r1", None, "button", "Continue", 10.0);
-        button.attrs.insert("aria-label".into(), "Continue".into());
-        let result = search_snapshot(&snapshot(vec![button]), "continue");
-        assert_eq!(result.matches.len(), 1);
-        assert_eq!(result.matches[0].element_id.as_deref(), Some("e1"));
-        assert_eq!(result.matches[0].page, 1);
-    }
-
-    #[test]
-    fn search_snapshot_matches_placeholder_and_href() {
-        let mut input = node("r1", None, "input", "", 10.0);
-        input
-            .attrs
-            .insert("placeholder".into(), "Search docs".into());
-        input.attrs.insert("type".into(), "text".into());
-        let mut link = node("r2", None, "a", "Docs", 40.0);
-        link.attrs.insert("href".into(), "/docs/api".into());
-
-        let placeholder_result = search_snapshot(&snapshot(vec![input.clone()]), "docs");
-        assert_eq!(placeholder_result.matches.len(), 1);
-        assert_eq!(
-            placeholder_result.matches[0].element_id.as_deref(),
-            Some("e1")
-        );
-
-        let href_result = search_snapshot(&snapshot(vec![link]), "api");
-        assert_eq!(href_result.matches.len(), 1);
-        assert_eq!(href_result.matches[0].element_id.as_deref(), Some("e1"));
-    }
-
-    #[test]
-    fn search_snapshot_prioritizes_interactive_elements() {
-        let text = node("r1", None, "div", "Continue reading", 10.0);
-        let button = node("r2", None, "button", "Continue", 40.0);
-        let result = search_snapshot(&snapshot(vec![text, button]), "continue");
-        assert_eq!(result.matches.len(), 2);
-        assert_eq!(result.matches[0].ref_id, "r2");
-        assert_eq!(result.matches[0].element_id.as_deref(), Some("e1"));
-    }
-
-    #[test]
-    fn list_with_only_links_emits_links_not_list() {
-        let ul = node("r1", None, "ul", "", 10.0);
-        let li1 = node("r2", Some("r1"), "li", "Code", 10.0);
-        let mut a1 = node("r3", Some("r2"), "a", "Code", 10.0);
-        a1.attrs.insert("href".into(), "/code".into());
-        let li2 = node("r4", Some("r1"), "li", "Issues", 30.0);
-        let mut a2 = node("r5", Some("r4"), "a", "Issues", 30.0);
-        a2.attrs.insert("href".into(), "/issues".into());
-
-        let page =
-            parse_page_from_snapshot(&snapshot(vec![ul, li1, a1, li2, a2]), Some(1)).unwrap();
-
-        assert!(
-            !page.elements.iter().any(|e| matches!(e, Element::List { .. })),
-            "should not emit a list element"
-        );
-
-        let links: Vec<_> = page
-            .elements
-            .iter()
-            .filter(|e| matches!(e, Element::Link { .. }))
-            .collect();
-        assert_eq!(links.len(), 2);
-        match &links[0] {
-            Element::Link { text, href, .. } => {
-                assert_eq!(text, "Code");
-                assert_eq!(href.as_deref(), Some("/code"));
-            }
+            BlockData::List { children, .. } => assert!(!children.is_empty()),
             other => panic!("unexpected: {other:?}"),
         }
     }
 
     #[test]
-    fn plain_text_list_stays_as_list() {
-        let ul = node("r1", None, "ul", "", 10.0);
-        let li1 = node("r2", Some("r1"), "li", "Alpha", 10.0);
-        let li2 = node("r3", Some("r1"), "li", "Beta", 30.0);
-
-        let page = parse_page_from_snapshot(&snapshot(vec![ul, li1, li2]), Some(1)).unwrap();
-
-        match &page.elements[0] {
-            Element::List { items, .. } => {
-                assert_eq!(items, &["Alpha", "Beta"]);
-            }
-            other => panic!("unexpected: {other:?}"),
-        }
+    fn search_snapshot_returns_interactive_ids() {
+        let body = node("r1", None, "body", "", 0.0);
+        let mut link = node("r2", Some("r1"), "a", "Continue", 10.0);
+        link.attrs.insert("href".into(), "/next".into());
+        let result = search_snapshot(&snapshot(vec![body, link]), "continue");
+        assert_eq!(result.matches[0].element_id.as_deref(), Some("e1"));
     }
 
     #[test]
-    fn mixed_list_keeps_text_items_and_emits_links() {
-        let ul = node("r1", None, "ul", "", 10.0);
-        let li1 = node("r2", Some("r1"), "li", "Alpha", 10.0);
-        let li2 = node("r3", Some("r1"), "li", "Code", 30.0);
-        let mut a = node("r4", Some("r3"), "a", "Code", 30.0);
-        a.attrs.insert("href".into(), "/code".into());
-
-        let page =
-            parse_page_from_snapshot(&snapshot(vec![ul, li1, li2, a]), Some(1)).unwrap();
-
-        let list_items: Vec<_> = page
-            .elements
-            .iter()
-            .filter_map(|e| match e {
-                Element::List { items, .. } => Some(items.clone()),
-                _ => None,
-            })
-            .flatten()
-            .collect();
-        assert_eq!(list_items, vec!["Alpha"]);
-
-        assert!(page.elements.iter().any(|e| matches!(e, Element::Link { .. })));
-    }
-
-    #[test]
-    fn button_uses_title_as_fallback_label() {
-        let mut btn = node("r1", None, "button", "", 10.0);
-        btn.attrs.insert("title".into(), "Close".into());
-        let page = parse_page_from_snapshot(&snapshot(vec![btn]), Some(1)).unwrap();
-
-        match &page.elements[0] {
-            Element::Button { text, .. } => assert_eq!(text, "Close"),
+    fn button_uses_title_as_label() {
+        let body = node("r1", None, "body", "", 0.0);
+        let mut button = node("r2", Some("r1"), "button", "", 10.0);
+        button.attrs.insert("title".into(), "Close".into());
+        let page = parse_page_from_snapshot(&snapshot(vec![body, button]), Some(1)).unwrap();
+        match &page.nodes[0] {
+            Node::Button { text, .. } => assert_eq!(text, "Close"),
             other => panic!("unexpected: {other:?}"),
         }
     }

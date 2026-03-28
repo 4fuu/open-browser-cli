@@ -1,6 +1,6 @@
 ---
 name: open-browser-cli
-description: "Drives a real browser session via browser-cli: open stateful sessions, inspect structured XML/JSON pages, search content, click, type, wait, read truncated text or paginated blocks, and run plugins. Use when login state, cookies, SPA rendering, or durable page interactions matter."
+description: "Drives a real browser session via browser-cli: open stateful sessions, inspect structured XML/JSON pages, search content, click, type, wait for page stability, read truncated text or paginated blocks, and run plugins. Use when login state, cookies, SPA rendering, or durable page interactions matter."
 ---
 
 # browser-cli
@@ -10,11 +10,11 @@ description: "Drives a real browser session via browser-cli: open stateful sessi
 ## Core rules
 
 - Always fetch the current page before interacting. Element IDs are reassigned on every `page`.
-- `click` and `type` use the numeric part of an element ID: `e3` becomes `3`.
+- `click` and `type` accept either the numeric part of an element ID (`e3` becomes `3`) or a text query matched against the current page's interactive elements.
 - `text` and `block` use full IDs such as `t1` and `b1`.
 - Prefer `--json` when another tool or agent will consume the result.
 - Use `--fresh` when the cache may be stale or the page is highly dynamic.
-- Use `--page-after` when the next step depends on the updated page immediately after an action.
+- `open`, `click`, `type`, and `wait` return the current page by default; use `--quiet` when you only need a compact success result.
 - Use `click --new-session` only for link elements with `href`. It opens the destination in a new session and keeps the source session unchanged.
 
 ## Default workflow
@@ -22,7 +22,7 @@ description: "Drives a real browser session via browser-cli: open stateful sessi
 1. Open a session: `browser-cli open <url>`
 2. Inspect the page: `browser-cli page <session_id>`
 3. Choose targets from the returned `element_id`, `text_id`, or `block_id`
-4. Interact with `click`, `type`, or `wait`
+4. Interact with `click`, `type`, or use `wait` to let the page settle
 5. Re-run `page` after any meaningful state change
 6. Close the session when done: `browser-cli close <session_id>`
 
@@ -30,7 +30,7 @@ description: "Drives a real browser session via browser-cli: open stateful sessi
 
 - Prefer `--json` for chaining multiple tool calls.
 - Prefer `search` before `page` only when you need a quick target lookup and not full page context.
-- Prefer `wait --page-after` after actions that trigger client-side rendering or delayed navigation.
+- Prefer plain `wait` after actions that trigger client-side rendering or delayed navigation; add `--for <text>` when you are waiting for a specific control or label to appear.
 - If a flow spans multiple tabs or destinations, preserve the current state by opening links with `click --new-session`.
 - Treat this tool as stateful browser automation with structured output, not as HTML scraping.
 
@@ -78,6 +78,7 @@ When you pause:
 
 ```bash
 browser-cli open https://example.com
+browser-cli open https://example.com --quiet
 browser-cli list
 browser-cli close s123
 browser-cli close --all
@@ -114,6 +115,15 @@ If a list or table is block-paginated, continue reading with `block`:
 
 ```bash
 browser-cli block s123 b1 --source-page 1 -p 2
+browser-cli block s123 b1 --all
+```
+
+For a focused subtree or full expansion of one target, use `view`:
+
+```bash
+browser-cli view s123 e3
+browser-cli view s123 t1
+browser-cli view s123 "pricing"
 ```
 
 ### Interact with the page
@@ -122,10 +132,13 @@ Always resolve targets from the latest `page` output first.
 
 ```bash
 browser-cli click s123 1
+browser-cli click s123 "Sign in"
 browser-cli click s123 1 --new-session
 browser-cli type s123 3 "hello world"
-browser-cli wait s123 --selector "#app" --timeout 5000
-browser-cli click s123 1 --json --page-after
+browser-cli type s123 "Search" "hello world"
+browser-cli wait s123 --timeout 5000
+browser-cli wait s123 --for "Continue" --json
+browser-cli click s123 1 --json
 ```
 
 Use `--quiet` for automation flows that only need success/failure:
@@ -151,11 +164,12 @@ browser-cli plugin list
 browser-cli plugin run <name> s123 --json
 ```
 
-When authoring or debugging plugin rules, remember that string waits are matched against structured page content, not raw DOM selectors.
+When authoring or debugging plugin rules, remember that string waits are matched against structured page content.
 
 ## Failure patterns
 
 - `session not found`: the session was closed or never created.
 - Element lookup failed: you used an ID from an old page snapshot or the wrong `-p` page number.
+- No interactive element matched the query: retry with `page` or `search` to confirm the visible label, placeholder, or link text.
 - `--new-session` failed: the chosen element is not a link with `href`.
 - Dynamic page mismatch: retry with `page --fresh`, `search --fresh`, or action flags like `click --fresh`.

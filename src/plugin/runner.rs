@@ -7,7 +7,7 @@ use tokio::time::sleep;
 use super::loader::Plugin;
 #[cfg(test)]
 use super::loader::Step;
-use crate::page::structure::{Element, PageData, parse_page_from_snapshot, parse_snapshot};
+use crate::page::structure::{Node, PageData, parse_page_from_snapshot, parse_snapshot};
 use crate::protocol::messages::{Request, actions};
 use crate::transport::client::send_request;
 
@@ -306,20 +306,20 @@ async fn fetch_page(session_id: &str) -> Result<PageData> {
 fn resolve_interactive_target(page: &PageData, query: &str) -> Option<ResolvedTarget> {
     let query = query.trim().to_lowercase();
 
-    for element in &page.elements {
-        let element_id = interactive_element_id(element)?;
-        let candidate = interactive_candidate_text(element);
-        let matches = element_id.eq_ignore_ascii_case(query.as_str())
-            || candidate.to_lowercase().contains(&query);
-        if !matches {
-            continue;
+    for node in &page.nodes {
+        for (element_id, candidate) in interactive_targets(node) {
+            let matches = element_id.eq_ignore_ascii_case(query.as_str())
+                || candidate.to_lowercase().contains(&query);
+            if !matches {
+                continue;
+            }
+            let ref_id = page.element_refs.get(&element_id)?.clone();
+            return Some(ResolvedTarget {
+                element_id,
+                ref_id,
+                description: candidate,
+            });
         }
-        let ref_id = page.element_refs.get(&element_id)?.clone();
-        return Some(ResolvedTarget {
-            element_id,
-            ref_id,
-            description: candidate,
-        });
     }
 
     None
@@ -327,75 +327,105 @@ fn resolve_interactive_target(page: &PageData, query: &str) -> Option<ResolvedTa
 
 fn page_contains_query(page: &PageData, query: &str) -> bool {
     let query = query.trim().to_lowercase();
-    page.elements.iter().any(|element| {
+    page.nodes.iter().any(|node| {
         let mut haystack = String::new();
-        if let Some(id) = interactive_element_id(element) {
+        for (id, candidate) in interactive_targets(node) {
             haystack.push_str(&id);
             haystack.push(' ');
+            haystack.push_str(&candidate);
+            haystack.push(' ');
         }
-        haystack.push_str(&interactive_candidate_text(element));
-        haystack.push(' ');
-        haystack.push_str(&element_text(element));
+        haystack.push_str(&node_text(node));
         haystack.to_lowercase().contains(&query)
     })
 }
 
-fn interactive_element_id(element: &Element) -> Option<String> {
-    match element {
-        Element::Link { id, .. }
-        | Element::Button { id, .. }
-        | Element::Input { id, .. }
-        | Element::Checkbox { id, .. }
-        | Element::Radio { id, .. }
-        | Element::Select { id, .. }
-        | Element::Textarea { id, .. } => Some(id.clone()),
-        Element::Text { .. }
-        | Element::Heading { .. }
-        | Element::List { .. }
-        | Element::Table { .. } => None,
-    }
+fn interactive_targets(node: &Node) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    collect_interactive_targets(node, &mut out);
+    out
 }
 
-fn interactive_candidate_text(element: &Element) -> String {
-    match element {
-        Element::Link { text, href, .. } => join_parts([Some(text.as_str()), href.as_deref()]),
-        Element::Button { text, .. } => text.clone(),
-        Element::Input {
-            input_type,
-            placeholder,
-            value,
-            ..
-        } => join_parts([
-            Some(input_type.as_str()),
-            placeholder.as_deref(),
-            value.as_deref(),
-        ]),
-        Element::Checkbox { text, .. } => text.clone(),
-        Element::Radio { text, name, .. } => join_parts([Some(text.as_str()), name.as_deref()]),
-        Element::Select { text, selected, .. } => {
-            join_parts([Some(text.as_str()), selected.as_deref()])
+fn collect_interactive_targets(node: &Node, out: &mut Vec<(String, String)>) {
+    match node {
+        Node::Link { id, text, href } => {
+            out.push((
+                id.clone(),
+                join_parts([Some(text.as_str()), href.as_deref()]),
+            ));
         }
-        Element::Textarea {
-            text, placeholder, ..
-        } => join_parts([Some(text.as_str()), placeholder.as_deref()]),
-        Element::Text { .. }
-        | Element::Heading { .. }
-        | Element::List { .. }
-        | Element::Table { .. } => String::new(),
+        Node::Button { id, text } => {
+            out.push((id.clone(), text.clone()));
+        }
+        Node::Input {
+            id,
+            input_type,
+            placeholder,
+            value,
+            ..
+        } => {
+            out.push((
+                id.clone(),
+                join_parts([
+                    Some(input_type.as_str()),
+                    placeholder.as_deref(),
+                    value.as_deref(),
+                ]),
+            ));
+        }
+        Node::Checkbox { id, text, .. } => {
+            out.push((id.clone(), text.clone()));
+        }
+        Node::Radio { id, text, name, .. } => {
+            out.push((
+                id.clone(),
+                join_parts([Some(text.as_str()), name.as_deref()]),
+            ));
+        }
+        Node::Select {
+            id, text, selected, ..
+        } => {
+            out.push((
+                id.clone(),
+                join_parts([Some(text.as_str()), selected.as_deref()]),
+            ));
+        }
+        Node::Textarea {
+            id,
+            text,
+            placeholder,
+            ..
+        } => {
+            out.push((
+                id.clone(),
+                join_parts([Some(text.as_str()), placeholder.as_deref()]),
+            ));
+        }
+        Node::Container { children, .. }
+        | Node::List { children, .. }
+        | Node::Item { children }
+        | Node::Table { children, .. }
+        | Node::Row { children }
+        | Node::Cell { children } => {
+            for child in children {
+                collect_interactive_targets(child, out);
+            }
+        }
+        Node::Text { .. } | Node::Heading { .. } => {}
     }
 }
 
-fn element_text(element: &Element) -> String {
-    match element {
-        Element::Text { text, .. }
-        | Element::Button { text, .. }
-        | Element::Heading { text, .. }
-        | Element::Checkbox { text, .. }
-        | Element::Textarea { text, .. }
-        | Element::Select { text, .. }
-        | Element::Radio { text, .. } => text.clone(),
-        Element::Link { text, href, .. } => join_parts([Some(text.as_str()), href.as_deref()]),
-        Element::Input {
+fn node_text(node: &Node) -> String {
+    match node {
+        Node::Text { text, .. }
+        | Node::Heading { text, .. }
+        | Node::Button { text, .. }
+        | Node::Checkbox { text, .. }
+        | Node::Radio { text, .. }
+        | Node::Select { text, .. }
+        | Node::Textarea { text, .. } => text.clone(),
+        Node::Link { text, href, .. } => join_parts([Some(text.as_str()), href.as_deref()]),
+        Node::Input {
             input_type,
             placeholder,
             value,
@@ -405,11 +435,15 @@ fn element_text(element: &Element) -> String {
             placeholder.as_deref(),
             value.as_deref(),
         ]),
-        Element::List { items, .. } => items.join(" "),
-        Element::Table { rows, .. } => rows
+        Node::Container { children, .. }
+        | Node::List { children, .. }
+        | Node::Item { children }
+        | Node::Table { children, .. }
+        | Node::Row { children }
+        | Node::Cell { children } => children
             .iter()
-            .flat_map(|r| r.iter())
-            .cloned()
+            .map(node_text)
+            .filter(|value| !value.is_empty())
             .collect::<Vec<_>>()
             .join(" "),
     }

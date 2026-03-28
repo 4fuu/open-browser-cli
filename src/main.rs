@@ -81,6 +81,12 @@ enum Command {
     Open {
         /// URL to open
         url: String,
+        /// DOM stability wait timeout in milliseconds (0 to skip)
+        #[arg(long, default_value_t = 3000)]
+        wait: u64,
+        /// Only print session info without page content
+        #[arg(long)]
+        quiet: bool,
         /// Output as JSON
         #[arg(long)]
         json: bool,
@@ -126,8 +132,8 @@ enum Command {
     Click {
         /// Session ID
         session_id: String,
-        /// Element ID to click
-        id: u32,
+        /// Element ID (number) or text query to find element
+        target: String,
         /// Page number used to resolve element IDs
         #[arg(short, long)]
         page: Option<u32>,
@@ -141,18 +147,18 @@ enum Command {
         #[arg(long)]
         json: bool,
         /// Suppress page output and print a compact success result
-        #[arg(long, conflicts_with = "page_after")]
-        quiet: bool,
-        /// Include the updated page after the action
         #[arg(long)]
+        quiet: bool,
+        /// Include the updated page after the action (now default, kept for compatibility)
+        #[arg(long, hide = true)]
         page_after: bool,
     },
     /// Type text into an input element
     Type {
         /// Session ID
         session_id: String,
-        /// Element ID to type into
-        id: u32,
+        /// Element ID (number) or text query to find element
+        target: String,
         /// Text to type
         text: String,
         /// Page number used to resolve element IDs
@@ -165,10 +171,10 @@ enum Command {
         #[arg(long)]
         json: bool,
         /// Suppress page output and print a compact success result
-        #[arg(long, conflicts_with = "page_after")]
-        quiet: bool,
-        /// Include the updated page after the action
         #[arg(long)]
+        quiet: bool,
+        /// Include the updated page after the action (now default, kept for compatibility)
+        #[arg(long, hide = true)]
         page_after: bool,
     },
     /// Search for text on the page
@@ -184,18 +190,21 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
-    /// Wait for a condition
+    /// Wait for page stability or for a specific element to appear
     Wait {
         /// Session ID
         session_id: String,
-        /// CSS selector to wait for
-        #[arg(short, long)]
-        selector: Option<String>,
+        /// Wait until an element matching this text appears on the page
+        #[arg(long = "for")]
+        for_text: Option<String>,
         /// Timeout in milliseconds
         #[arg(short, long)]
         timeout: Option<u64>,
-        /// Include the updated page after the wait completes
+        /// Suppress page output and print a compact success result
         #[arg(long)]
+        quiet: bool,
+        /// Include the updated page after the wait completes (now default, kept for compatibility)
+        #[arg(long, hide = true)]
         page_after: bool,
         /// Output as JSON
         #[arg(long)]
@@ -223,10 +232,29 @@ enum Command {
         session_id: String,
         /// Block ID returned in page output
         block_id: String,
-        /// Source page number used to resolve block IDs from page output
+        /// Source page number used to resolve block IDs from page output (defaults to current scroll position)
         #[arg(long)]
         source_page: Option<u32>,
         /// Block page number
+        #[arg(short, long, conflicts_with = "all")]
+        page: Option<u32>,
+        /// Output all pages of the block at once
+        #[arg(long, conflicts_with = "page")]
+        all: bool,
+        /// Bypass cache and fetch a fresh snapshot from the browser
+        #[arg(long)]
+        fresh: bool,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show a focused view of a specific element, text, or block and its surrounding context
+    View {
+        /// Session ID
+        session_id: String,
+        /// Target: element ID (e.g. "e3" or "3"), block ID (e.g. "b1"), text ID (e.g. "t1"), or text query
+        target: String,
+        /// Page number used to resolve IDs
         #[arg(short, long)]
         page: Option<u32>,
         /// Bypass cache and fetch a fresh snapshot from the browser
@@ -316,7 +344,9 @@ async fn main() -> anyhow::Result<()> {
                 .or_else(|| manifest_path.clone());
             cli::commands::teardown(browser, resolved_path.as_deref())?
         }
-        Command::Open { ref url, json } => cli::commands::open(url, json).await?,
+        Command::Open { ref url, wait, quiet, json } => {
+            cli::commands::open(url, wait, quiet, json).await?
+        }
         Command::Close {
             ref session_id,
             all,
@@ -333,48 +363,46 @@ async fn main() -> anyhow::Result<()> {
         } => cli::commands::page(session_id, page, next, prev, fresh, json).await?,
         Command::Click {
             ref session_id,
-            id,
+            ref target,
             page,
             new_session,
             fresh,
             json,
             quiet,
-            page_after,
+            ..
         } => {
             cli::commands::click(
                 session_id,
-                id,
+                target,
                 page,
                 new_session,
                 cli::commands::ActionOptions {
                     fresh,
                     json_mode: json,
                     quiet,
-                    page_after,
                 },
             )
             .await?
         }
         Command::Type {
             ref session_id,
-            id,
+            ref target,
             ref text,
             page,
             fresh,
             json,
             quiet,
-            page_after,
+            ..
         } => {
             cli::commands::type_text(
                 session_id,
-                id,
+                target,
                 text,
                 page,
                 cli::commands::ActionOptions {
                     fresh,
                     json_mode: json,
                     quiet,
-                    page_after,
                 },
             )
             .await?
@@ -387,12 +415,20 @@ async fn main() -> anyhow::Result<()> {
         } => cli::commands::search(session_id, query, fresh, json).await?,
         Command::Wait {
             ref session_id,
-            ref selector,
+            ref for_text,
             timeout,
-            page_after,
+            quiet,
             json,
+            ..
         } => {
-            cli::commands::wait(session_id, selector.as_deref(), timeout, page_after, json).await?
+            cli::commands::wait(
+                session_id,
+                for_text.as_deref(),
+                timeout,
+                quiet,
+                json,
+            )
+            .await?
         }
         Command::Text {
             ref session_id,
@@ -406,9 +442,13 @@ async fn main() -> anyhow::Result<()> {
             ref block_id,
             source_page,
             page,
+            all,
             fresh,
             json,
-        } => cli::commands::block(session_id, block_id, source_page, page, fresh, json).await?,
+        } => cli::commands::block(session_id, block_id, source_page, page, all, fresh, json).await?,
+        Command::View {
+            ref session_id, ref target, page, fresh, json,
+        } => cli::commands::view(session_id, target, page, fresh, json).await?,
         Command::Plugin { ref cmd } => match cmd {
             PluginCommand::Run {
                 name,

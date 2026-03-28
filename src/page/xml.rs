@@ -1,4 +1,4 @@
-use super::structure::{BlockData, Element, PageData};
+use super::structure::{BlockData, Node, PageData, ViewData};
 
 const MAX_INLINE_XML_LINE_LEN: usize = 100;
 
@@ -30,42 +30,6 @@ fn escaped_xml_len(s: &str) -> usize {
         .sum()
 }
 
-fn single_cell_row_inline_len(cell: &str, indent: usize) -> usize {
-    indent + "<row><cell></cell></row>".len() + escaped_xml_len(cell)
-}
-
-pub(crate) fn rendered_table_row_lines(row: &[String], indent: usize) -> usize {
-    if row.len() == 1 && single_cell_row_inline_len(&row[0], indent) <= MAX_INLINE_XML_LINE_LEN {
-        1
-    } else {
-        row.len() + 2
-    }
-}
-
-fn render_table_row(out: &mut String, row: &[String], indent: usize) {
-    let indent_str = " ".repeat(indent);
-    let cell_indent_str = " ".repeat(indent + 2);
-
-    if row.len() == 1 && single_cell_row_inline_len(&row[0], indent) <= MAX_INLINE_XML_LINE_LEN {
-        out.push_str(&format!(
-            "{}<row><cell>{}</cell></row>\n",
-            indent_str,
-            escape_xml(&row[0]),
-        ));
-        return;
-    }
-
-    out.push_str(&format!("{indent_str}<row>\n"));
-    for cell in row {
-        out.push_str(&format!(
-            "{}<cell>{}</cell>\n",
-            cell_indent_str,
-            escape_xml(cell)
-        ));
-    }
-    out.push_str(&format!("{indent_str}</row>\n"));
-}
-
 pub fn render_xml(page: &PageData) -> String {
     let mut out = String::new();
     out.push_str(&format!(
@@ -82,11 +46,9 @@ pub fn render_xml(page: &PageData) -> String {
         ));
     }
     out.push_str(">\n");
-
-    for element in &page.elements {
-        render_element(&mut out, element);
+    for node in &page.nodes {
+        render_node(&mut out, node, 2);
     }
-
     out.push_str("</page>\n");
     out
 }
@@ -96,12 +58,12 @@ pub fn render_block_xml(block: &BlockData) -> String {
     match block {
         BlockData::List {
             id,
-            items,
             truncated,
             shown,
             total_items,
             current_page,
             total_pages,
+            children,
         } => {
             out.push_str(&format!(
                 "<block id=\"{}\" kind=\"list\" current=\"{}\" total=\"{}\"",
@@ -116,19 +78,19 @@ pub fn render_block_xml(block: &BlockData) -> String {
                 ));
             }
             out.push_str(">\n");
-            for item in items {
-                out.push_str(&format!("  <item>{}</item>\n", escape_xml(item)));
+            for node in children {
+                render_node(&mut out, node, 2);
             }
             out.push_str("</block>\n");
         }
         BlockData::Table {
             id,
-            rows,
             truncated,
             shown,
             total_items,
             current_page,
             total_pages,
+            children,
         } => {
             out.push_str(&format!(
                 "<block id=\"{}\" kind=\"table\" current=\"{}\" total=\"{}\"",
@@ -143,8 +105,8 @@ pub fn render_block_xml(block: &BlockData) -> String {
                 ));
             }
             out.push_str(">\n");
-            for row in rows {
-                render_table_row(&mut out, row, 2);
+            for node in children {
+                render_node(&mut out, node, 2);
             }
             out.push_str("</block>\n");
         }
@@ -152,50 +114,92 @@ pub fn render_block_xml(block: &BlockData) -> String {
     out
 }
 
-fn render_element(out: &mut String, element: &Element) {
-    match element {
-        Element::Text { id, text } => {
+pub fn render_view_xml(view: &ViewData) -> String {
+    let mut out = String::new();
+    out.push_str(&format!(
+        "<view target=\"{}\" url=\"{}\" title=\"{}\"",
+        escape_xml(&view.target),
+        escape_xml(&view.url),
+        escape_xml(&view.title),
+    ));
+    if let Some(context) = &view.context_tag {
+        out.push_str(&format!(" context=\"{}\"", escape_xml(context)));
+    }
+    out.push_str(">\n");
+    for node in &view.nodes {
+        render_node(&mut out, node, 2);
+    }
+    out.push_str("</view>\n");
+    out
+}
+
+fn render_node(out: &mut String, node: &Node, indent: usize) {
+    let indent_str = " ".repeat(indent);
+    match node {
+        Node::Container {
+            tag,
+            role,
+            children,
+        } => {
+            out.push_str(&format!(
+                "{indent_str}<container tag=\"{}\"",
+                escape_xml(tag)
+            ));
+            if let Some(role) = role {
+                out.push_str(&format!(" role=\"{}\"", escape_xml(role)));
+            }
+            if children.is_empty() {
+                out.push_str("/>\n");
+                return;
+            }
+            out.push_str(">\n");
+            for child in children {
+                render_node(out, child, indent + 2);
+            }
+            out.push_str(&format!("{indent_str}</container>\n"));
+        }
+        Node::Text { id, text } => {
             if let Some(id) = id {
                 out.push_str(&format!(
-                    "  <text id=\"{}\">{}</text>\n",
+                    "{indent_str}<text id=\"{}\">{}</text>\n",
                     escape_xml(id),
                     escape_xml(text),
                 ));
             } else {
-                out.push_str(&format!("  <text>{}</text>\n", escape_xml(text)));
+                out.push_str(&format!("{indent_str}<text>{}</text>\n", escape_xml(text)));
             }
         }
-        Element::Heading { level, text } => {
+        Node::Heading { level, text } => {
             out.push_str(&format!(
-                "  <heading level=\"{}\">{}</heading>\n",
+                "{indent_str}<heading level=\"{}\">{}</heading>\n",
                 level,
                 escape_xml(text),
             ));
         }
-        Element::Link { id, text, href } => {
+        Node::Link { id, text, href } => {
             if let Some(href) = href {
                 out.push_str(&format!(
-                    "  <link id=\"{}\" href=\"{}\">{}</link>\n",
+                    "{indent_str}<link id=\"{}\" href=\"{}\">{}</link>\n",
                     escape_xml(id),
                     escape_xml(href),
                     escape_xml(text),
                 ));
             } else {
                 out.push_str(&format!(
-                    "  <link id=\"{}\">{}</link>\n",
+                    "{indent_str}<link id=\"{}\">{}</link>\n",
                     escape_xml(id),
                     escape_xml(text),
                 ));
             }
         }
-        Element::Button { id, text } => {
+        Node::Button { id, text } => {
             out.push_str(&format!(
-                "  <button id=\"{}\">{}</button>\n",
+                "{indent_str}<button id=\"{}\">{}</button>\n",
                 escape_xml(id),
                 escape_xml(text),
             ));
         }
-        Element::Input {
+        Node::Input {
             id,
             input_type,
             placeholder,
@@ -203,7 +207,7 @@ fn render_element(out: &mut String, element: &Element) {
             disabled,
         } => {
             out.push_str(&format!(
-                "  <input id=\"{}\" type=\"{}\"",
+                "{indent_str}<input id=\"{}\" type=\"{}\"",
                 escape_xml(id),
                 escape_xml(input_type),
             ));
@@ -218,8 +222,8 @@ fn render_element(out: &mut String, element: &Element) {
             }
             out.push_str("/>\n");
         }
-        Element::Checkbox { id, text, checked } => {
-            out.push_str(&format!("  <checkbox id=\"{}\"", escape_xml(id)));
+        Node::Checkbox { id, text, checked } => {
+            out.push_str(&format!("{indent_str}<checkbox id=\"{}\"", escape_xml(id)));
             if *checked {
                 out.push_str(" checked=\"true\"");
             }
@@ -229,13 +233,13 @@ fn render_element(out: &mut String, element: &Element) {
                 out.push_str(&format!(">{}</checkbox>\n", escape_xml(text)));
             }
         }
-        Element::Radio {
+        Node::Radio {
             id,
             text,
             name,
             selected,
         } => {
-            out.push_str(&format!("  <radio id=\"{}\"", escape_xml(id)));
+            out.push_str(&format!("{indent_str}<radio id=\"{}\"", escape_xml(id)));
             if let Some(name) = name {
                 out.push_str(&format!(" name=\"{}\"", escape_xml(name)));
             }
@@ -248,13 +252,13 @@ fn render_element(out: &mut String, element: &Element) {
                 out.push_str(&format!(">{}</radio>\n", escape_xml(text)));
             }
         }
-        Element::Select {
+        Node::Select {
             id,
             text,
             selected,
             disabled,
         } => {
-            out.push_str(&format!("  <select id=\"{}\"", escape_xml(id)));
+            out.push_str(&format!("{indent_str}<select id=\"{}\"", escape_xml(id)));
             if let Some(selected) = selected {
                 out.push_str(&format!(" value=\"{}\"", escape_xml(selected)));
             }
@@ -267,13 +271,13 @@ fn render_element(out: &mut String, element: &Element) {
                 out.push_str(&format!(">{}</select>\n", escape_xml(text)));
             }
         }
-        Element::Textarea {
+        Node::Textarea {
             id,
             text,
             placeholder,
             disabled,
         } => {
-            out.push_str(&format!("  <textarea id=\"{}\"", escape_xml(id)));
+            out.push_str(&format!("{indent_str}<textarea id=\"{}\"", escape_xml(id)));
             if let Some(placeholder) = placeholder {
                 out.push_str(&format!(" placeholder=\"{}\"", escape_xml(placeholder)));
             }
@@ -282,16 +286,56 @@ fn render_element(out: &mut String, element: &Element) {
             }
             out.push_str(&format!(">{}</textarea>\n", escape_xml(text)));
         }
-        Element::List {
+        Node::List {
             id,
-            items,
             truncated,
             shown,
             total_items,
             current_page,
             total_pages,
+            children,
         } => {
-            out.push_str("  <list");
+            out.push_str(&format!("{indent_str}<list"));
+            if let Some(id) = id {
+                out.push_str(&format!(" id=\"{}\"", escape_xml(id)));
+            }
+            if *truncated {
+                out.push_str(&format!(
+                    " truncated=\"true\" shown=\"{}\" total_items=\"{}\" current=\"{}\" total=\"{}\"",
+                    shown, total_items, current_page, total_pages
+                ));
+            }
+            if children.is_empty() {
+                out.push_str("/>\n");
+                return;
+            }
+            out.push_str(">\n");
+            for child in children {
+                render_node(out, child, indent + 2);
+            }
+            out.push_str(&format!("{indent_str}</list>\n"));
+        }
+        Node::Item { children } => {
+            if let Some(text) = inline_text_only(children) {
+                out.push_str(&format!("{indent_str}<item>{}</item>\n", escape_xml(text)));
+                return;
+            }
+            out.push_str(&format!("{indent_str}<item>\n"));
+            for child in children {
+                render_node(out, child, indent + 2);
+            }
+            out.push_str(&format!("{indent_str}</item>\n"));
+        }
+        Node::Table {
+            id,
+            truncated,
+            shown,
+            total_items,
+            current_page,
+            total_pages,
+            children,
+        } => {
+            out.push_str(&format!("{indent_str}<table"));
             if let Some(id) = id {
                 out.push_str(&format!(" id=\"{}\"", escape_xml(id)));
             }
@@ -302,36 +346,62 @@ fn render_element(out: &mut String, element: &Element) {
                 ));
             }
             out.push_str(">\n");
-            for item in items {
-                out.push_str(&format!("    <item>{}</item>\n", escape_xml(item)));
+            for child in children {
+                render_node(out, child, indent + 2);
             }
-            out.push_str("  </list>\n");
+            out.push_str(&format!("{indent_str}</table>\n"));
         }
-        Element::Table {
-            id,
-            rows,
-            truncated,
-            shown,
-            total_items,
-            current_page,
-            total_pages,
-        } => {
-            out.push_str("  <table");
-            if let Some(id) = id {
-                out.push_str(&format!(" id=\"{}\"", escape_xml(id)));
-            }
-            if *truncated {
-                out.push_str(&format!(
-                    " truncated=\"true\" shown=\"{}\" total_items=\"{}\" current=\"{}\" total=\"{}\"",
-                    shown, total_items, current_page, total_pages
-                ));
-            }
-            out.push_str(">\n");
-            for row in rows {
-                render_table_row(out, row, 4);
-            }
-            out.push_str("  </table>\n");
-        }
+        Node::Row { children } => render_row(out, children, indent),
+        Node::Cell { children } => render_cell(out, children, indent),
+    }
+}
+
+fn render_row(out: &mut String, children: &[Node], indent: usize) {
+    let indent_str = " ".repeat(indent);
+    if children.len() == 1 && inline_text_len(&children[0], indent) <= MAX_INLINE_XML_LINE_LEN {
+        let text = inline_text_only(std::slice::from_ref(&children[0])).expect("single text cell");
+        out.push_str(&format!(
+            "{indent_str}<row><cell>{}</cell></row>\n",
+            escape_xml(text),
+        ));
+        return;
+    }
+
+    out.push_str(&format!("{indent_str}<row>\n"));
+    for child in children {
+        render_node(out, child, indent + 2);
+    }
+    out.push_str(&format!("{indent_str}</row>\n"));
+}
+
+fn render_cell(out: &mut String, children: &[Node], indent: usize) {
+    let indent_str = " ".repeat(indent);
+    if let Some(text) = inline_text_only(children) {
+        out.push_str(&format!("{indent_str}<cell>{}</cell>\n", escape_xml(text)));
+        return;
+    }
+
+    out.push_str(&format!("{indent_str}<cell>\n"));
+    for child in children {
+        render_node(out, child, indent + 2);
+    }
+    out.push_str(&format!("{indent_str}</cell>\n"));
+}
+
+fn inline_text_only(children: &[Node]) -> Option<&str> {
+    match children {
+        [Node::Text { id: None, text }] => Some(text.as_str()),
+        _ => None,
+    }
+}
+
+fn inline_text_len(cell: &Node, indent: usize) -> usize {
+    match cell {
+        Node::Cell { children } => match inline_text_only(children) {
+            Some(text) => indent + "<row><cell></cell></row>".len() + escaped_xml_len(text),
+            None => usize::MAX,
+        },
+        _ => usize::MAX,
     }
 }
 
@@ -339,16 +409,16 @@ fn render_element(out: &mut String, element: &Element) {
 mod tests {
     use super::*;
 
-    fn page(elements: Vec<Element>) -> PageData {
+    fn page(nodes: Vec<Node>) -> PageData {
         PageData {
             url: "https://example.com".into(),
             title: "Example".into(),
             current_page: 1,
             total_pages: 3,
-            truncated: true,
-            shown: elements.len(),
-            total: 999,
-            elements,
+            truncated: false,
+            shown: nodes.len(),
+            total: nodes.len(),
+            nodes,
             element_refs: Default::default(),
             full_texts: Default::default(),
             full_blocks: Default::default(),
@@ -356,87 +426,87 @@ mod tests {
     }
 
     #[test]
-    fn render_xml_supports_new_interactive_types() {
-        let xml = render_xml(&page(vec![
-            Element::Link {
-                id: "e1".into(),
-                text: "Sign In".into(),
-                href: Some("/login".into()),
-            },
-            Element::Checkbox {
-                id: "e2".into(),
-                text: "Remember me".into(),
-                checked: true,
-            },
-            Element::Textarea {
-                id: "e3".into(),
-                text: "hello".into(),
-                placeholder: Some("message".into()),
-                disabled: false,
-            },
-            Element::List {
-                id: Some("b1".into()),
-                items: vec!["One".into(), "Two".into()],
-                truncated: true,
-                shown: 2,
-                total_items: 25,
-                current_page: 1,
-                total_pages: 2,
-            },
-        ]));
+    fn render_xml_renders_recursive_structure() {
+        let xml = render_xml(&page(vec![Node::Container {
+            tag: "section".into(),
+            role: None,
+            children: vec![
+                Node::Heading {
+                    level: 1,
+                    text: "Hello".into(),
+                },
+                Node::Link {
+                    id: "e1".into(),
+                    text: "Docs".into(),
+                    href: Some("/docs".into()),
+                },
+            ],
+        }]));
 
-        assert!(xml.contains("<page url=\"https://example.com\" title=\"Example\" current=\"1\""));
-        assert!(xml.contains("truncated=\"true\""));
-        assert!(xml.contains("<link id=\"e1\" href=\"/login\">Sign In</link>"));
-        assert!(xml.contains("<checkbox id=\"e2\" checked=\"true\">Remember me</checkbox>"));
-        assert!(xml.contains("<textarea id=\"e3\" placeholder=\"message\">hello</textarea>"));
-        assert!(xml.contains("<list id=\"b1\" truncated=\"true\" shown=\"2\" total_items=\"25\" current=\"1\" total=\"2\">"));
+        assert!(xml.contains("<container tag=\"section\">"));
+        assert!(xml.contains("<heading level=\"1\">Hello</heading>"));
+        assert!(xml.contains("<link id=\"e1\" href=\"/docs\">Docs</link>"));
     }
 
     #[test]
-    fn render_block_xml_supports_list_blocks() {
+    fn render_xml_renders_nested_table_links() {
+        let xml = render_xml(&page(vec![Node::Table {
+            id: None,
+            truncated: false,
+            shown: 1,
+            total_items: 1,
+            current_page: 1,
+            total_pages: 1,
+            children: vec![Node::Row {
+                children: vec![
+                    Node::Cell {
+                        children: vec![Node::Text {
+                            id: None,
+                            text: "1".into(),
+                        }],
+                    },
+                    Node::Cell {
+                        children: vec![Node::Link {
+                            id: "e12".into(),
+                            text: "Red Desert".into(),
+                            href: Some("/app/1".into()),
+                        }],
+                    },
+                ],
+            }],
+        }]));
+
+        assert!(xml.contains(
+            "<cell>\n        <link id=\"e12\" href=\"/app/1\">Red Desert</link>\n      </cell>"
+        ));
+    }
+
+    #[test]
+    fn render_block_xml_supports_tree_blocks() {
         let xml = render_block_xml(&BlockData::List {
             id: "b1".into(),
-            items: vec!["First".into(), "Second".into()],
             truncated: true,
             shown: 2,
-            total_items: 35,
+            total_items: 20,
             current_page: 2,
-            total_pages: 18,
+            total_pages: 10,
+            children: vec![
+                Node::Item {
+                    children: vec![Node::Text {
+                        id: None,
+                        text: "Alpha".into(),
+                    }],
+                },
+                Node::Item {
+                    children: vec![Node::Text {
+                        id: None,
+                        text: "Beta".into(),
+                    }],
+                },
+            ],
         });
 
-        assert!(xml.contains("<block id=\"b1\" kind=\"list\" current=\"2\" total=\"18\""));
-        assert!(xml.contains("<item>First</item>"));
-    }
-
-    #[test]
-    fn render_xml_compacts_single_cell_rows_when_short() {
-        let xml = render_xml(&page(vec![Element::Table {
-            id: None,
-            rows: vec![vec!["Latest commit History38 Commits38 Commits".into()]],
-            truncated: false,
-            shown: 1,
-            total_items: 1,
-            current_page: 1,
-            total_pages: 1,
-        }]));
-
-        assert!(xml.contains("<row><cell>Latest commit History38 Commits38 Commits</cell></row>"));
-    }
-
-    #[test]
-    fn render_xml_expands_single_cell_rows_when_too_long() {
-        let xml = render_xml(&page(vec![Element::Table {
-            id: None,
-            rows: vec![vec!["x".repeat(200)]],
-            truncated: false,
-            shown: 1,
-            total_items: 1,
-            current_page: 1,
-            total_pages: 1,
-        }]));
-
-        assert!(xml.contains("    <row>\n"));
-        assert!(!xml.contains("<row><cell>"));
+        assert!(xml.contains("<block id=\"b1\" kind=\"list\" current=\"2\" total=\"10\""));
+        assert!(xml.contains("<item>Alpha</item>"));
     }
 }
