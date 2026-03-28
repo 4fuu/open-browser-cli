@@ -74,6 +74,7 @@ class CursorAgent {
   private hoveredElement: Element | null = null;
   private lastCliActivityAt = Date.now();
   private lastIdleMoveFinishedAt = 0;
+  private activeTarget: Element | null = null;
 
   constructor() {
     document.addEventListener('visibilitychange', () => {
@@ -97,6 +98,35 @@ class CursorAgent {
       const point = this.clampPoint({ x: this.currentX, y: this.currentY });
       this.moveInstant(point.x, point.y);
     });
+
+    window.addEventListener('scroll', () => {
+      if (!this.enabled) {
+        return;
+      }
+      if (this.activeTarget) {
+        // Target may have been unmounted by SPA rerender
+        if (!this.activeTarget.isConnected) {
+          this.activeTarget = null;
+          return;
+        }
+        const rect = this.activeTarget.getBoundingClientRect();
+        // Check if rect intersects viewport at all
+        const inViewport =
+          rect.bottom > 0 &&
+          rect.top < window.innerHeight &&
+          rect.right > 0 &&
+          rect.left < window.innerWidth;
+
+        if (inViewport) {
+          // Clamp to viewport for cursor position
+          const x = Math.max(0, Math.min(rect.left + rect.width / 2, window.innerWidth));
+          const y = Math.max(0, Math.min(rect.top + rect.height / 2, window.innerHeight));
+          this.moveInstant(x, y);
+        } else {
+          this.moveInstant(-100, -100);
+        }
+      }
+    }, { passive: true });
   }
 
   start(sessionId: string): void {
@@ -121,6 +151,7 @@ class CursorAgent {
     this.taskMode = false;
     this.cancelMotion();
     this.hoveredElement = null;
+    this.activeTarget = null;
 
     if (cursorOverlay && document.documentElement.contains(cursorOverlay)) {
       cursorOverlay.remove();
@@ -128,11 +159,12 @@ class CursorAgent {
     cursorOverlay = null;
   }
 
-  beginTask(): void {
+  beginTask(target?: Element): void {
     if (!this.enabled) {
       this.start('implicit');
     }
     this.cancelMotion();
+    this.activeTarget = target ?? null;
     this.setTaskMode(true);
   }
 
@@ -140,6 +172,7 @@ class CursorAgent {
     if (!this.enabled) {
       return;
     }
+    this.activeTarget = null;
     this.setTaskMode(false);
     this.lastIdleMoveFinishedAt = Date.now();
     this.startIdleLoop();
@@ -499,7 +532,7 @@ async function handleClick(req: ContentRequest): Promise<ContentResponse> {
   const beforeUrl = location.href;
   const beforeTitle = document.title;
 
-  cursorAgent.beginTask();
+  cursorAgent.beginTask(target);
 
   try {
     const point = await prepareInteractionPoint(target);
@@ -542,7 +575,7 @@ async function handleType(req: ContentRequest): Promise<ContentResponse> {
   const beforeUrl = location.href;
   const beforeTitle = document.title;
 
-  cursorAgent.beginTask();
+  cursorAgent.beginTask(target);
 
   try {
     const point = await prepareInteractionPoint(target);
