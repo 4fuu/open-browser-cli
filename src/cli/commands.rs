@@ -76,7 +76,11 @@ pub async fn open(url: &str, wait_after_load: u64, quiet: bool, json_mode: bool)
 }
 
 async fn open_session(url: &str, wait_after_load: u64) -> Result<(String, String)> {
-    let data = send_ok(Request::new(actions::OPEN, json!({ "url": url, "wait_after_load": wait_after_load }))).await?;
+    let data = send_ok(Request::new(
+        actions::OPEN,
+        json!({ "url": url, "wait_after_load": wait_after_load }),
+    ))
+    .await?;
     let session_id = data
         .get("session_id")
         .and_then(|v| v.as_str())
@@ -254,7 +258,7 @@ pub async fn click(
     let (element_key, ref_id) = resolve_element_target(target, &page, session_id, page_num)?;
 
     if new_session {
-        let href = link_href_by_element_id(&page.nodes, &element_key).ok_or_else(|| {
+        let href = link_href_by_element_id(&page, &element_key).ok_or_else(|| {
             anyhow::anyhow!("element is not a link or does not have an href: {element_key}")
         })?;
         let url = resolve_link_url(&page.url, href)?;
@@ -340,7 +344,7 @@ fn resolve_element_target(
         return Ok((element_key, ref_id));
     }
 
-    let found = find_interactive_by_query(&page.nodes, target).ok_or_else(|| {
+    let found = find_interactive_by_query(page, target).ok_or_else(|| {
         anyhow::anyhow!(
             "no interactive element matching \"{target}\" found on the current page. \
              Run `browser-cli page {session_id}` to see available elements."
@@ -356,9 +360,18 @@ fn resolve_element_target(
     Ok((found, ref_id))
 }
 
-fn find_interactive_by_query(nodes: &[Node], query: &str) -> Option<String> {
+fn find_interactive_by_query(page: &PageData, query: &str) -> Option<String> {
     let needle = query.to_lowercase();
-    find_interactive_recursive(nodes, &needle)
+    find_interactive_recursive(&page.nodes, &needle).or_else(|| {
+        page.full_blocks.values().find_map(|block| match block {
+            crate::page::structure::StoredBlock::List { items } => {
+                find_interactive_recursive(items, &needle)
+            }
+            crate::page::structure::StoredBlock::Table { rows } => {
+                find_interactive_recursive(rows, &needle)
+            }
+        })
+    })
 }
 
 fn find_interactive_recursive(nodes: &[Node], needle: &str) -> Option<String> {
@@ -424,7 +437,20 @@ fn find_interactive_recursive(nodes: &[Node], needle: &str) -> Option<String> {
     None
 }
 
-fn link_href_by_element_id<'a>(nodes: &'a [Node], element_id: &str) -> Option<&'a str> {
+fn link_href_by_element_id<'a>(page: &'a PageData, element_id: &str) -> Option<&'a str> {
+    link_href_by_nodes(&page.nodes, element_id).or_else(|| {
+        page.full_blocks.values().find_map(|block| match block {
+            crate::page::structure::StoredBlock::List { items } => {
+                link_href_in_nodes(items, element_id)
+            }
+            crate::page::structure::StoredBlock::Table { rows } => {
+                link_href_in_nodes(rows, element_id)
+            }
+        })
+    })
+}
+
+fn link_href_by_nodes<'a>(nodes: &'a [Node], element_id: &str) -> Option<&'a str> {
     for node in nodes {
         match node {
             Node::Link { id, href, .. } if id == element_id => return href.as_deref(),
@@ -434,7 +460,27 @@ fn link_href_by_element_id<'a>(nodes: &'a [Node], element_id: &str) -> Option<&'
             | Node::Table { children, .. }
             | Node::Row { children }
             | Node::Cell { children } => {
-                if let Some(href) = link_href_by_element_id(children, element_id) {
+                if let Some(href) = link_href_by_nodes(children, element_id) {
+                    return Some(href);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn link_href_in_nodes<'a>(nodes: &'a [Node], element_id: &str) -> Option<&'a str> {
+    for node in nodes {
+        match node {
+            Node::Link { id, href, .. } if id == element_id => return href.as_deref(),
+            Node::Container { children, .. }
+            | Node::List { children, .. }
+            | Node::Item { children }
+            | Node::Table { children, .. }
+            | Node::Row { children }
+            | Node::Cell { children } => {
+                if let Some(href) = link_href_in_nodes(children, element_id) {
                     return Some(href);
                 }
             }
@@ -756,8 +802,13 @@ pub async fn view(
     let page = resolve_page(
         session_id,
         page_num,
-        if fresh { actions::GET_PAGE_FRESH } else { actions::GET_PAGE },
-    ).await?;
+        if fresh {
+            actions::GET_PAGE_FRESH
+        } else {
+            actions::GET_PAGE
+        },
+    )
+    .await?;
 
     let view = extract_view(&page, target)?;
     println!("{}", crate::cli::output::format_view(&view, json_mode));
@@ -991,7 +1042,7 @@ fn validate_setup_args(browser: &str, extension_id: Option<&str>) -> Result<()> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::page::structure::Node;
+    use crate::page::structure::{Node, StoredBlock};
     use crate::protocol::messages::Response;
 
     #[test]
@@ -1034,6 +1085,7 @@ mod tests {
             Node::Container {
                 tag: "section".into(),
                 role: None,
+                class_name: None,
                 children: vec![
                     Node::Link {
                         id: "e2".into(),
@@ -1049,9 +1101,76 @@ mod tests {
             },
         ];
 
-        assert_eq!(link_href_by_element_id(&nodes, "e1"), None);
-        assert_eq!(link_href_by_element_id(&nodes, "e2"), Some("/docs"));
-        assert_eq!(link_href_by_element_id(&nodes, "e3"), None);
+        let page = PageData {
+            url: "https://example.com".into(),
+            title: "Example".into(),
+            current_page: 1,
+            total_pages: 1,
+            truncated: false,
+            shown: nodes.len(),
+            total: nodes.len(),
+            nodes,
+            element_refs: Default::default(),
+            full_texts: Default::default(),
+            full_blocks: Default::default(),
+        };
+
+        assert_eq!(link_href_by_element_id(&page, "e1"), None);
+        assert_eq!(link_href_by_element_id(&page, "e2"), Some("/docs"));
+        assert_eq!(link_href_by_element_id(&page, "e3"), None);
+    }
+
+    #[test]
+    fn link_href_lookup_searches_expanded_blocks() {
+        let page = PageData {
+            url: "https://example.com".into(),
+            title: "Example".into(),
+            current_page: 1,
+            total_pages: 1,
+            truncated: false,
+            shown: 1,
+            total: 1,
+            nodes: vec![Node::List {
+                id: Some("b1".into()),
+                truncated: true,
+                shown: 1,
+                total_items: 2,
+                current_page: 1,
+                total_pages: 2,
+                children: vec![Node::Item {
+                    children: vec![Node::Link {
+                        id: "e1".into(),
+                        text: "Visible".into(),
+                        href: Some("/visible".into()),
+                    }],
+                }],
+            }],
+            element_refs: Default::default(),
+            full_texts: Default::default(),
+            full_blocks: std::collections::HashMap::from([(
+                "b1".into(),
+                StoredBlock::List {
+                    items: vec![
+                        Node::Item {
+                            children: vec![Node::Link {
+                                id: "e1".into(),
+                                text: "Visible".into(),
+                                href: Some("/visible".into()),
+                            }],
+                        },
+                        Node::Item {
+                            children: vec![Node::Link {
+                                id: "e2".into(),
+                                text: "Hidden".into(),
+                                href: Some("/hidden".into()),
+                            }],
+                        },
+                    ],
+                },
+            )]),
+        };
+
+        assert_eq!(link_href_by_element_id(&page, "e2"), Some("/hidden"));
     }
 
     #[test]

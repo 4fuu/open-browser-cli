@@ -47,7 +47,7 @@ pub fn render_xml(page: &PageData) -> String {
     }
     out.push_str(">\n");
     for node in &page.nodes {
-        render_node(&mut out, node, 2);
+        render_node(&mut out, node, 2, None);
     }
     out.push_str("</page>\n");
     out
@@ -79,7 +79,7 @@ pub fn render_block_xml(block: &BlockData) -> String {
             }
             out.push_str(">\n");
             for node in children {
-                render_node(&mut out, node, 2);
+                render_node(&mut out, node, 2, None);
             }
             out.push_str("</block>\n");
         }
@@ -106,7 +106,7 @@ pub fn render_block_xml(block: &BlockData) -> String {
             }
             out.push_str(">\n");
             for node in children {
-                render_node(&mut out, node, 2);
+                render_node(&mut out, node, 2, None);
             }
             out.push_str("</block>\n");
         }
@@ -127,77 +127,86 @@ pub fn render_view_xml(view: &ViewData) -> String {
     }
     out.push_str(">\n");
     for node in &view.nodes {
-        render_node(&mut out, node, 2);
+        render_node(&mut out, node, 2, None);
     }
     out.push_str("</view>\n");
     out
 }
 
-fn render_node(out: &mut String, node: &Node, indent: usize) {
+#[derive(Debug, Clone, Default)]
+struct SourceMeta {
+    roles: Vec<String>,
+    classes: Vec<String>,
+}
+
+fn render_node(out: &mut String, node: &Node, indent: usize, source_meta: Option<SourceMeta>) {
     let indent_str = " ".repeat(indent);
     match node {
         Node::Container {
             tag,
             role,
+            class_name,
             children,
         } => {
+            if !should_render_container_tag(tag, role.as_deref()) {
+                let next_source = extend_source_meta(
+                    source_meta.as_ref(),
+                    tag,
+                    role.as_deref(),
+                    class_name.as_deref(),
+                );
+                for child in children {
+                    render_node(out, child, indent, Some(next_source.clone()));
+                }
+                return;
+            }
             out.push_str(&format!(
                 "{indent_str}<container tag=\"{}\"",
                 escape_xml(tag)
             ));
-            if let Some(role) = role {
-                out.push_str(&format!(" role=\"{}\"", escape_xml(role)));
-            }
+            push_semantic_attrs(
+                out,
+                source_meta.as_ref(),
+                role.as_deref(),
+                class_name.as_deref(),
+            );
             if children.is_empty() {
                 out.push_str("/>\n");
                 return;
             }
             out.push_str(">\n");
             for child in children {
-                render_node(out, child, indent + 2);
+                render_node(out, child, indent + 2, None);
             }
             out.push_str(&format!("{indent_str}</container>\n"));
         }
         Node::Text { id, text } => {
+            out.push_str(&format!("{indent_str}<text"));
             if let Some(id) = id {
-                out.push_str(&format!(
-                    "{indent_str}<text id=\"{}\">{}</text>\n",
-                    escape_xml(id),
-                    escape_xml(text),
-                ));
-            } else {
-                out.push_str(&format!("{indent_str}<text>{}</text>\n", escape_xml(text)));
+                out.push_str(&format!(" id=\"{}\"", escape_xml(id)));
             }
+            push_inherited_attrs(out, source_meta.as_ref());
+            out.push_str(&format!(">{}</text>\n", escape_xml(text)));
         }
         Node::Heading { level, text } => {
-            out.push_str(&format!(
-                "{indent_str}<heading level=\"{}\">{}</heading>\n",
-                level,
-                escape_xml(text),
-            ));
+            out.push_str(&format!("{indent_str}<heading level=\"{}\"", level));
+            push_inherited_attrs(out, source_meta.as_ref());
+            out.push_str(&format!(">{}</heading>\n", escape_xml(text)));
         }
         Node::Link { id, text, href } => {
+            out.push_str(&format!("{indent_str}<link id=\"{}\"", escape_xml(id)));
+            push_inherited_attrs(out, source_meta.as_ref());
             if let Some(href) = href {
-                out.push_str(&format!(
-                    "{indent_str}<link id=\"{}\" href=\"{}\">{}</link>\n",
-                    escape_xml(id),
-                    escape_xml(href),
-                    escape_xml(text),
-                ));
+                out.push_str(&format!(" href=\"{}\"", escape_xml(href)));
+                out.push_str(&format!(">{}</link>\n", escape_xml(text)));
             } else {
-                out.push_str(&format!(
-                    "{indent_str}<link id=\"{}\">{}</link>\n",
-                    escape_xml(id),
-                    escape_xml(text),
-                ));
+                out.push_str(&format!(">{}</link>\n", escape_xml(text)));
             }
         }
         Node::Button { id, text } => {
-            out.push_str(&format!(
-                "{indent_str}<button id=\"{}\">{}</button>\n",
-                escape_xml(id),
-                escape_xml(text),
-            ));
+            out.push_str(&format!("{indent_str}<button id=\"{}\"", escape_xml(id)));
+            push_inherited_attrs(out, source_meta.as_ref());
+            out.push_str(&format!(">{}</button>\n", escape_xml(text)));
         }
         Node::Input {
             id,
@@ -211,6 +220,7 @@ fn render_node(out: &mut String, node: &Node, indent: usize) {
                 escape_xml(id),
                 escape_xml(input_type),
             ));
+            push_inherited_attrs(out, source_meta.as_ref());
             if let Some(placeholder) = placeholder {
                 out.push_str(&format!(" placeholder=\"{}\"", escape_xml(placeholder)));
             }
@@ -224,6 +234,7 @@ fn render_node(out: &mut String, node: &Node, indent: usize) {
         }
         Node::Checkbox { id, text, checked } => {
             out.push_str(&format!("{indent_str}<checkbox id=\"{}\"", escape_xml(id)));
+            push_inherited_attrs(out, source_meta.as_ref());
             if *checked {
                 out.push_str(" checked=\"true\"");
             }
@@ -240,6 +251,7 @@ fn render_node(out: &mut String, node: &Node, indent: usize) {
             selected,
         } => {
             out.push_str(&format!("{indent_str}<radio id=\"{}\"", escape_xml(id)));
+            push_inherited_attrs(out, source_meta.as_ref());
             if let Some(name) = name {
                 out.push_str(&format!(" name=\"{}\"", escape_xml(name)));
             }
@@ -259,6 +271,7 @@ fn render_node(out: &mut String, node: &Node, indent: usize) {
             disabled,
         } => {
             out.push_str(&format!("{indent_str}<select id=\"{}\"", escape_xml(id)));
+            push_inherited_attrs(out, source_meta.as_ref());
             if let Some(selected) = selected {
                 out.push_str(&format!(" value=\"{}\"", escape_xml(selected)));
             }
@@ -278,6 +291,7 @@ fn render_node(out: &mut String, node: &Node, indent: usize) {
             disabled,
         } => {
             out.push_str(&format!("{indent_str}<textarea id=\"{}\"", escape_xml(id)));
+            push_inherited_attrs(out, source_meta.as_ref());
             if let Some(placeholder) = placeholder {
                 out.push_str(&format!(" placeholder=\"{}\"", escape_xml(placeholder)));
             }
@@ -296,6 +310,7 @@ fn render_node(out: &mut String, node: &Node, indent: usize) {
             children,
         } => {
             out.push_str(&format!("{indent_str}<list"));
+            push_inherited_attrs(out, source_meta.as_ref());
             if let Some(id) = id {
                 out.push_str(&format!(" id=\"{}\"", escape_xml(id)));
             }
@@ -311,7 +326,7 @@ fn render_node(out: &mut String, node: &Node, indent: usize) {
             }
             out.push_str(">\n");
             for child in children {
-                render_node(out, child, indent + 2);
+                render_node(out, child, indent + 2, None);
             }
             out.push_str(&format!("{indent_str}</list>\n"));
         }
@@ -320,9 +335,16 @@ fn render_node(out: &mut String, node: &Node, indent: usize) {
                 out.push_str(&format!("{indent_str}<item>{}</item>\n", escape_xml(text)));
                 return;
             }
+            if let [child] = &children[..]
+                && let Some(final_leaf) = collapse_inline_wrapper_leaf(child)
+                && item_can_inline_single_child(final_leaf)
+            {
+                render_node(out, final_leaf, indent, None);
+                return;
+            }
             out.push_str(&format!("{indent_str}<item>\n"));
             for child in children {
-                render_node(out, child, indent + 2);
+                render_node(out, child, indent + 2, None);
             }
             out.push_str(&format!("{indent_str}</item>\n"));
         }
@@ -336,6 +358,7 @@ fn render_node(out: &mut String, node: &Node, indent: usize) {
             children,
         } => {
             out.push_str(&format!("{indent_str}<table"));
+            push_inherited_attrs(out, source_meta.as_ref());
             if let Some(id) = id {
                 out.push_str(&format!(" id=\"{}\"", escape_xml(id)));
             }
@@ -347,7 +370,7 @@ fn render_node(out: &mut String, node: &Node, indent: usize) {
             }
             out.push_str(">\n");
             for child in children {
-                render_node(out, child, indent + 2);
+                render_node(out, child, indent + 2, None);
             }
             out.push_str(&format!("{indent_str}</table>\n"));
         }
@@ -369,7 +392,7 @@ fn render_row(out: &mut String, children: &[Node], indent: usize) {
 
     out.push_str(&format!("{indent_str}<row>\n"));
     for child in children {
-        render_node(out, child, indent + 2);
+        render_node(out, child, indent + 2, None);
     }
     out.push_str(&format!("{indent_str}</row>\n"));
 }
@@ -383,9 +406,83 @@ fn render_cell(out: &mut String, children: &[Node], indent: usize) {
 
     out.push_str(&format!("{indent_str}<cell>\n"));
     for child in children {
-        render_node(out, child, indent + 2);
+        render_node(out, child, indent + 2, None);
     }
     out.push_str(&format!("{indent_str}</cell>\n"));
+}
+
+fn push_inherited_attrs(out: &mut String, source_meta: Option<&SourceMeta>) {
+    let Some(source_meta) = source_meta else {
+        return;
+    };
+    if !source_meta.roles.is_empty() {
+        out.push_str(&format!(
+            " role=\"{}\"",
+            escape_xml(&source_meta.roles.join("/"))
+        ));
+    }
+    if !source_meta.classes.is_empty() {
+        out.push_str(&format!(
+            " class=\"{}\"",
+            escape_xml(&source_meta.classes.join("/"))
+        ));
+    }
+}
+
+fn push_semantic_attrs(
+    out: &mut String,
+    source_meta: Option<&SourceMeta>,
+    own_role: Option<&str>,
+    own_class: Option<&str>,
+) {
+    let mut roles = source_meta
+        .map(|meta| meta.roles.clone())
+        .unwrap_or_default();
+    if let Some(role) = own_role.filter(|role| !role.is_empty()) {
+        roles.push(role.to_string());
+    }
+    if !roles.is_empty() {
+        out.push_str(&format!(" role=\"{}\"", escape_xml(&roles.join("/"))));
+    }
+
+    let mut classes = source_meta
+        .map(|meta| meta.classes.clone())
+        .unwrap_or_default();
+    if let Some(class_name) = own_class.and_then(normalize_class_name) {
+        classes.push(class_name);
+    }
+    if !classes.is_empty() {
+        out.push_str(&format!(" class=\"{}\"", escape_xml(&classes.join("/"))));
+    }
+}
+
+fn extend_source_meta(
+    current: Option<&SourceMeta>,
+    _tag: &str,
+    role: Option<&str>,
+    class_name: Option<&str>,
+) -> SourceMeta {
+    let mut next = current.cloned().unwrap_or_default();
+    if let Some(role) = role.filter(|role| !role.is_empty()) {
+        next.roles.push(role.to_string());
+    }
+    if let Some(class_name) = class_name.and_then(normalize_class_name) {
+        next.classes.push(class_name);
+    }
+    next
+}
+
+fn normalize_class_name(class_name: &str) -> Option<String> {
+    let normalized = class_name
+        .split_whitespace()
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join(".");
+    if normalized.is_empty() {
+        None
+    } else {
+        Some(normalized)
+    }
 }
 
 fn inline_text_only(children: &[Node]) -> Option<&str> {
@@ -402,6 +499,60 @@ fn inline_text_len(cell: &Node, indent: usize) -> usize {
             None => usize::MAX,
         },
         _ => usize::MAX,
+    }
+}
+
+fn should_render_container_tag(tag: &str, role: Option<&str>) -> bool {
+    role.is_some()
+        || matches!(
+            tag,
+            "section"
+                | "article"
+                | "nav"
+                | "main"
+                | "header"
+                | "footer"
+                | "aside"
+                | "form"
+                | "dialog"
+                | "fieldset"
+                | "details"
+                | "summary"
+        )
+}
+
+fn item_can_inline_single_child(node: &Node) -> bool {
+    matches!(
+        node,
+        Node::Text { .. }
+            | Node::Heading { .. }
+            | Node::Link { .. }
+            | Node::Button { .. }
+            | Node::Input { .. }
+            | Node::Checkbox { .. }
+            | Node::Radio { .. }
+            | Node::Select { .. }
+            | Node::Textarea { .. }
+    )
+}
+
+fn collapse_inline_wrapper_leaf<'a>(node: &'a Node) -> Option<&'a Node> {
+    let mut current = node;
+    loop {
+        match current {
+            Node::Container {
+                tag,
+                role,
+                class_name,
+                children,
+            } if !should_render_container_tag(tag, role.as_deref())
+                && class_name.is_none()
+                && children.len() == 1 =>
+            {
+                current = &children[0];
+            }
+            _ => return Some(current),
+        }
     }
 }
 
@@ -430,6 +581,7 @@ mod tests {
         let xml = render_xml(&page(vec![Node::Container {
             tag: "section".into(),
             role: None,
+            class_name: None,
             children: vec![
                 Node::Heading {
                     level: 1,
@@ -508,5 +660,149 @@ mod tests {
 
         assert!(xml.contains("<block id=\"b1\" kind=\"list\" current=\"2\" total=\"10\""));
         assert!(xml.contains("<item>Alpha</item>"));
+    }
+
+    #[test]
+    fn render_xml_flattens_single_interactive_list_item() {
+        let xml = render_xml(&page(vec![Node::List {
+            id: None,
+            truncated: false,
+            shown: 1,
+            total_items: 1,
+            current_page: 1,
+            total_pages: 1,
+            children: vec![Node::Item {
+                children: vec![Node::Link {
+                    id: "e1".into(),
+                    text: "首页".into(),
+                    href: Some("/".into()),
+                }],
+            }],
+        }]));
+
+        assert!(xml.contains("<list>\n    <link id=\"e1\" href=\"/\">首页</link>\n  </list>"));
+        assert!(!xml.contains("<item>\n    <link"));
+    }
+
+    #[test]
+    fn render_xml_skips_presentational_containers() {
+        let xml = render_xml(&page(vec![Node::Container {
+            tag: "div".into(),
+            role: None,
+            class_name: None,
+            children: vec![Node::Container {
+                tag: "i".into(),
+                role: None,
+                class_name: None,
+                children: vec![Node::Link {
+                    id: "e1".into(),
+                    text: "首页".into(),
+                    href: Some("/".into()),
+                }],
+            }],
+        }]));
+
+        assert!(xml.contains("<link id=\"e1\" href=\"/\">首页</link>"));
+        assert!(!xml.contains("<container tag=\"div\">"));
+        assert!(!xml.contains("<container tag=\"i\">"));
+    }
+
+    #[test]
+    fn render_xml_keeps_item_group_when_single_child_is_container() {
+        let xml = render_xml(&page(vec![Node::List {
+            id: None,
+            truncated: false,
+            shown: 1,
+            total_items: 1,
+            current_page: 1,
+            total_pages: 1,
+            children: vec![Node::Item {
+                children: vec![Node::Container {
+                    tag: "div".into(),
+                    role: None,
+                    class_name: None,
+                    children: vec![
+                        Node::Link {
+                            id: "e1".into(),
+                            text: "".into(),
+                            href: Some("/video".into()),
+                        },
+                        Node::Text {
+                            id: None,
+                            text: "1".into(),
+                        },
+                        Node::Link {
+                            id: "e2".into(),
+                            text: "标题".into(),
+                            href: Some("/video".into()),
+                        },
+                    ],
+                }],
+            }],
+        }]));
+
+        assert!(xml.contains("<list>\n    <item>\n      <link id=\"e1\" href=\"/video\"></link>"));
+        assert!(xml.contains("<text>1</text>"));
+        assert!(xml.contains("<link id=\"e2\" href=\"/video\">标题</link>"));
+        assert!(!xml.contains("<container tag=\"div\">"));
+    }
+
+    #[test]
+    fn render_xml_inherits_class_from_flattened_containers() {
+        let xml = render_xml(&page(vec![Node::Container {
+            tag: "div".into(),
+            role: None,
+            class_name: Some("outer".into()),
+            children: vec![Node::Container {
+                tag: "div".into(),
+                role: None,
+                class_name: Some("mid wrapper".into()),
+                children: vec![Node::Container {
+                    tag: "div".into(),
+                    role: None,
+                    class_name: Some("inner".into()),
+                    children: vec![Node::Text {
+                        id: None,
+                        text: "42".into(),
+                    }],
+                }],
+            }],
+        }]));
+
+        assert!(xml.contains("class=\"outer/mid.wrapper/inner\""));
+    }
+
+    #[test]
+    fn render_xml_inlines_item_when_only_wrapper_chain_leads_to_single_leaf() {
+        let xml = render_xml(&page(vec![Node::List {
+            id: None,
+            truncated: false,
+            shown: 1,
+            total_items: 1,
+            current_page: 1,
+            total_pages: 1,
+            children: vec![Node::Item {
+                children: vec![Node::Container {
+                    tag: "li".into(),
+                    role: None,
+                    class_name: None,
+                    children: vec![Node::Container {
+                        tag: "div".into(),
+                        role: None,
+                        class_name: None,
+                        children: vec![Node::Link {
+                            id: "e16".into(),
+                            text: "投稿".into(),
+                            href: Some("/upload".into()),
+                        }],
+                    }],
+                }],
+            }],
+        }]));
+
+        assert!(
+            xml.contains("<list>\n    <link id=\"e16\" href=\"/upload\">投稿</link>\n  </list>")
+        );
+        assert!(!xml.contains("<item>\n    <link id=\"e16\""));
     }
 }

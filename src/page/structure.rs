@@ -32,6 +32,7 @@ pub enum Node {
     Container {
         tag: String,
         role: Option<String>,
+        class_name: Option<String>,
         children: Vec<Node>,
     },
     Text {
@@ -313,10 +314,7 @@ pub fn resolve_block(
         .map(|block| block.resolve(block_id, requested_page))
 }
 
-pub fn resolve_block_all(
-    page: &PageData,
-    block_id: &str,
-) -> Option<BlockData> {
+pub fn resolve_block_all(page: &PageData, block_id: &str) -> Option<BlockData> {
     page.full_blocks
         .get(block_id)
         .map(|block| block.resolve_all(block_id))
@@ -357,7 +355,10 @@ pub fn extract_view(page: &PageData, target: &str) -> Result<ViewData> {
                 url: page.url.clone(),
                 title: page.title.clone(),
                 context_tag: None,
-                nodes: vec![Node::Text { id: Some(target.to_string()), text: full_text.clone() }],
+                nodes: vec![Node::Text {
+                    id: Some(target.to_string()),
+                    text: full_text.clone(),
+                }],
             });
         }
     }
@@ -370,33 +371,94 @@ pub fn extract_view(page: &PageData, target: &str) -> Result<ViewData> {
         format!("e{target}")
     } else {
         // Case 4: Text query — search for matching interactive element
-        let found = find_view_target_by_query(&page.nodes, target)
-            .ok_or_else(|| anyhow::anyhow!(
-                "no element matching \"{target}\" found on the current page"
-            ))?;
+        let found = find_view_target_by_query(&page.nodes, target).ok_or_else(|| {
+            anyhow::anyhow!("no element matching \"{target}\" found on the current page")
+        })?;
         found
     };
 
     // Extract the subtree containing this element
-    let subtree = extract_subtree_for_element(&page.nodes, &element_id, &page.full_blocks);
-    if subtree.is_empty() {
-        anyhow::bail!("element {element_id} not found in current page tree");
-    }
-
-    let context_tag = match &subtree[0] {
-        Node::Container { tag, .. } => Some(tag.clone()),
-        Node::List { .. } => Some("list".to_string()),
-        Node::Table { .. } => Some("table".to_string()),
-        _ => None,
-    };
+    let (context_tag, nodes) = find_view_nodes_for_element(page, &element_id)
+        .ok_or_else(|| anyhow::anyhow!("element {element_id} not found in current page tree"))?;
 
     Ok(ViewData {
         target: element_id,
         url: page.url.clone(),
         title: page.title.clone(),
         context_tag,
-        nodes: subtree,
+        nodes,
     })
+}
+
+fn find_view_nodes_for_element(
+    page: &PageData,
+    element_id: &str,
+) -> Option<(Option<String>, Vec<Node>)> {
+    let subtree = extract_subtree_for_element(&page.nodes, element_id, &page.full_blocks);
+    if !subtree.is_empty() {
+        let context_tag = match &subtree[0] {
+            Node::Container { tag, .. } => Some(tag.clone()),
+            Node::List { .. } => Some("list".to_string()),
+            Node::Table { .. } => Some("table".to_string()),
+            _ => None,
+        };
+        return Some((context_tag, subtree));
+    }
+
+    find_view_nodes_in_blocks(&page.full_blocks, element_id)
+}
+
+fn find_view_nodes_in_blocks(
+    full_blocks: &HashMap<String, StoredBlock>,
+    element_id: &str,
+) -> Option<(Option<String>, Vec<Node>)> {
+    for (block_id, block) in full_blocks {
+        match block.resolve_all(block_id) {
+            BlockData::List {
+                id,
+                shown,
+                total_items,
+                children,
+                ..
+            } if subtree_contains_id(&children, element_id) => {
+                return Some((
+                    Some("list".to_string()),
+                    vec![Node::List {
+                        id: Some(id),
+                        truncated: false,
+                        shown,
+                        total_items,
+                        current_page: 1,
+                        total_pages: 1,
+                        children,
+                    }],
+                ));
+            }
+            BlockData::Table {
+                id,
+                shown,
+                total_items,
+                children,
+                ..
+            } if subtree_contains_id(&children, element_id) => {
+                return Some((
+                    Some("table".to_string()),
+                    vec![Node::Table {
+                        id: Some(id),
+                        truncated: false,
+                        shown,
+                        total_items,
+                        current_page: 1,
+                        total_pages: 1,
+                        children,
+                    }],
+                ));
+            }
+            _ => {}
+        }
+    }
+
+    None
 }
 
 fn find_view_target_by_query(nodes: &[Node], query: &str) -> Option<String> {
@@ -409,7 +471,11 @@ fn find_view_target_recursive(nodes: &[Node], needle: &str) -> Option<String> {
         match node {
             Node::Link { id, text, href, .. } => {
                 if text.to_lowercase().contains(needle)
-                    || href.as_deref().unwrap_or("").to_lowercase().contains(needle)
+                    || href
+                        .as_deref()
+                        .unwrap_or("")
+                        .to_lowercase()
+                        .contains(needle)
                 {
                     return Some(id.clone());
                 }
@@ -419,9 +485,22 @@ fn find_view_target_recursive(nodes: &[Node], needle: &str) -> Option<String> {
                     return Some(id.clone());
                 }
             }
-            Node::Input { id, placeholder, value, .. } => {
-                if placeholder.as_deref().unwrap_or("").to_lowercase().contains(needle)
-                    || value.as_deref().unwrap_or("").to_lowercase().contains(needle)
+            Node::Input {
+                id,
+                placeholder,
+                value,
+                ..
+            } => {
+                if placeholder
+                    .as_deref()
+                    .unwrap_or("")
+                    .to_lowercase()
+                    .contains(needle)
+                    || value
+                        .as_deref()
+                        .unwrap_or("")
+                        .to_lowercase()
+                        .contains(needle)
                 {
                     return Some(id.clone());
                 }
@@ -434,7 +513,10 @@ fn find_view_target_recursive(nodes: &[Node], needle: &str) -> Option<String> {
                     return Some(id.clone());
                 }
             }
-            Node::Text { id: Some(tid), text } => {
+            Node::Text {
+                id: Some(tid),
+                text,
+            } => {
                 if text.to_lowercase().contains(needle) {
                     return Some(tid.clone());
                 }
@@ -455,7 +537,11 @@ fn find_view_target_recursive(nodes: &[Node], needle: &str) -> Option<String> {
     None
 }
 
-fn extract_subtree_for_element(nodes: &[Node], element_id: &str, full_blocks: &HashMap<String, StoredBlock>) -> Vec<Node> {
+fn extract_subtree_for_element(
+    nodes: &[Node],
+    element_id: &str,
+    full_blocks: &HashMap<String, StoredBlock>,
+) -> Vec<Node> {
     for node in nodes {
         if let Some(result) = find_context_subtree(node, element_id, full_blocks) {
             return result;
@@ -464,7 +550,11 @@ fn extract_subtree_for_element(nodes: &[Node], element_id: &str, full_blocks: &H
     Vec::new()
 }
 
-fn find_context_subtree(node: &Node, element_id: &str, full_blocks: &HashMap<String, StoredBlock>) -> Option<Vec<Node>> {
+fn find_context_subtree(
+    node: &Node,
+    element_id: &str,
+    full_blocks: &HashMap<String, StoredBlock>,
+) -> Option<Vec<Node>> {
     if node_has_id(node, element_id) {
         return Some(vec![node.clone()]);
     }
@@ -489,7 +579,13 @@ fn find_context_subtree(node: &Node, element_id: &str, full_blocks: &HashMap<Str
                     if let Some(block) = full_blocks.get(block_id) {
                         let expanded = block.resolve_all(block_id);
                         return Some(vec![match expanded {
-                            BlockData::List { id, shown, total_items, children, .. } => Node::List {
+                            BlockData::List {
+                                id,
+                                shown,
+                                total_items,
+                                children,
+                                ..
+                            } => Node::List {
                                 id: Some(id),
                                 truncated: false,
                                 shown,
@@ -511,7 +607,13 @@ fn find_context_subtree(node: &Node, element_id: &str, full_blocks: &HashMap<Str
                     if let Some(block) = full_blocks.get(block_id) {
                         let expanded = block.resolve_all(block_id);
                         return Some(vec![match expanded {
-                            BlockData::Table { id, shown, total_items, children, .. } => Node::Table {
+                            BlockData::Table {
+                                id,
+                                shown,
+                                total_items,
+                                children,
+                                ..
+                            } => Node::Table {
                                 id: Some(id),
                                 truncated: false,
                                 shown,
@@ -527,9 +629,7 @@ fn find_context_subtree(node: &Node, element_id: &str, full_blocks: &HashMap<Str
                 return Some(vec![node.clone()]);
             }
         }
-        Node::Item { children }
-        | Node::Row { children }
-        | Node::Cell { children } => {
+        Node::Item { children } | Node::Row { children } | Node::Cell { children } => {
             if subtree_contains_id(children, element_id) {
                 return Some(vec![node.clone()]);
             }
@@ -576,8 +676,18 @@ fn node_contains_id(node: &Node, id: &str) -> bool {
 fn is_semantic_container(tag: &str) -> bool {
     matches!(
         tag,
-        "section" | "article" | "nav" | "main" | "header" | "footer"
-        | "aside" | "form" | "dialog" | "fieldset" | "details" | "summary"
+        "section"
+            | "article"
+            | "nav"
+            | "main"
+            | "header"
+            | "footer"
+            | "aside"
+            | "form"
+            | "dialog"
+            | "fieldset"
+            | "details"
+            | "summary"
     )
 }
 
@@ -694,6 +804,7 @@ fn build_node<'a>(
             return Some(Node::Container {
                 tag: raw.tag.clone(),
                 role: raw.attrs.get("role").cloned(),
+                class_name: raw.attrs.get("class").cloned(),
                 children,
             });
         }
@@ -703,6 +814,7 @@ fn build_node<'a>(
         return Some(Node::Container {
             tag: raw.tag.clone(),
             role: raw.attrs.get("role").cloned(),
+            class_name: raw.attrs.get("class").cloned(),
             children,
         });
     }
@@ -1128,6 +1240,11 @@ fn classify_interactive<'a>(
     let attrs = &node.attrs;
     let role = attrs.get("role").map(String::as_str);
     let onclick = attrs.get("onclick").is_some();
+    let focusable = has_non_negative_tabindex(attrs);
+    let has_selection_state = attrs.contains_key("aria-selected")
+        || attrs.contains_key("aria-current")
+        || attrs.contains_key("aria-expanded");
+    let has_press_state = attrs.contains_key("aria-pressed");
 
     match tag {
         "a" => Some(InteractiveKind::Link {
@@ -1171,7 +1288,28 @@ fn classify_interactive<'a>(
                 }),
             }
         }
-        _ if role == Some("button") || onclick => Some(InteractiveKind::Button { text }),
+        _ if matches!(role, Some("link")) => Some(InteractiveKind::Link {
+            text,
+            href: attrs.get("href").cloned(),
+        }),
+        _ if matches!(
+            role,
+            Some(
+                "button"
+                    | "tab"
+                    | "menuitem"
+                    | "option"
+                    | "switch"
+                    | "menuitemcheckbox"
+                    | "menuitemradio"
+            )
+        ) =>
+        {
+            Some(InteractiveKind::Button { text })
+        }
+        _ if onclick || has_press_state || (focusable && has_selection_state) => {
+            Some(InteractiveKind::Button { text })
+        }
         _ => None,
     }
 }
@@ -1209,8 +1347,25 @@ fn has_interactive_ancestor<'a>(
 
 fn is_interactive_tag(tag: &str, attrs: &HashMap<String, String>) -> bool {
     matches!(tag, "a" | "button" | "input" | "select" | "textarea")
-        || attrs.get("role").map(String::as_str) == Some("button")
+        || matches!(
+            attrs.get("role").map(String::as_str),
+            Some(
+                "button"
+                    | "link"
+                    | "tab"
+                    | "menuitem"
+                    | "option"
+                    | "switch"
+                    | "menuitemcheckbox"
+                    | "menuitemradio"
+            )
+        )
         || attrs.contains_key("onclick")
+        || attrs.contains_key("aria-pressed")
+        || (has_non_negative_tabindex(attrs)
+            && (attrs.contains_key("aria-selected")
+                || attrs.contains_key("aria-current")
+                || attrs.contains_key("aria-expanded")))
 }
 
 fn should_emit_container(raw: &RawNode, children: &[Node]) -> bool {
@@ -1320,9 +1475,25 @@ fn excerpt_around_match(text: &str, lower: &str, needle: &str) -> String {
     let Some(idx) = lower.find(needle) else {
         return truncate_text(text, MAX_TEXT_LEN);
     };
-    let start = idx.saturating_sub(40);
-    let end = (idx + needle.len() + 80).min(text.len());
+    let start = floor_char_boundary(text, idx.saturating_sub(40));
+    let end = ceil_char_boundary(text, (idx + needle.len() + 80).min(text.len()));
     truncate_text(text[start..end].trim(), MAX_TEXT_LEN)
+}
+
+fn floor_char_boundary(text: &str, index: usize) -> usize {
+    let mut boundary = index.min(text.len());
+    while boundary > 0 && !text.is_char_boundary(boundary) {
+        boundary -= 1;
+    }
+    boundary
+}
+
+fn ceil_char_boundary(text: &str, index: usize) -> usize {
+    let mut boundary = index.min(text.len());
+    while boundary < text.len() && !text.is_char_boundary(boundary) {
+        boundary += 1;
+    }
+    boundary
 }
 
 fn intersects_page(rect: &Rect, page_top: f64, page_bottom: f64) -> bool {
@@ -1336,6 +1507,13 @@ fn is_trueish(value: Option<&String>) -> bool {
         value.map(String::as_str),
         Some("true" | "checked" | "disabled" | "selected" | "1" | "")
     )
+}
+
+fn has_non_negative_tabindex(attrs: &HashMap<String, String>) -> bool {
+    attrs
+        .get("tabindex")
+        .and_then(|value| value.parse::<i32>().ok())
+        .is_some_and(|value| value >= 0)
 }
 
 fn count_nodes(nodes: &[Node]) -> usize {
@@ -1674,6 +1852,69 @@ mod tests {
     }
 
     #[test]
+    fn extract_view_finds_element_inside_expanded_block() {
+        let page = PageData {
+            url: "https://example.com".into(),
+            title: "Example".into(),
+            current_page: 1,
+            total_pages: 1,
+            truncated: false,
+            shown: 1,
+            total: 1,
+            nodes: vec![Node::List {
+                id: Some("b1".into()),
+                truncated: true,
+                shown: 1,
+                total_items: 3,
+                current_page: 1,
+                total_pages: 3,
+                children: vec![Node::Item {
+                    children: vec![Node::Link {
+                        id: "e1".into(),
+                        text: "Visible".into(),
+                        href: Some("/visible".into()),
+                    }],
+                }],
+            }],
+            element_refs: HashMap::new(),
+            full_texts: HashMap::new(),
+            full_blocks: HashMap::from([(
+                "b1".into(),
+                StoredBlock::List {
+                    items: vec![
+                        Node::Item {
+                            children: vec![Node::Link {
+                                id: "e1".into(),
+                                text: "Visible".into(),
+                                href: Some("/visible".into()),
+                            }],
+                        },
+                        Node::Item {
+                            children: vec![Node::Link {
+                                id: "e2".into(),
+                                text: "Hidden".into(),
+                                href: Some("/hidden".into()),
+                            }],
+                        },
+                    ],
+                },
+            )]),
+        };
+
+        let view = extract_view(&page, "e2").unwrap();
+        assert_eq!(view.context_tag.as_deref(), Some("list"));
+        assert!(matches!(view.nodes[0], Node::List { .. }));
+    }
+
+    #[test]
+    fn excerpt_around_match_handles_utf8_boundaries() {
+        let text = "首页番剧直播游戏中心会员购漫画赛事下载客户端 大会员99+消息 白名单";
+        let lower = text.to_lowercase();
+        let excerpt = excerpt_around_match(text, &lower, "白名");
+        assert!(excerpt.contains("白名单"));
+    }
+
+    #[test]
     fn button_uses_title_as_label() {
         let body = node("r1", None, "body", "", 0.0);
         let mut button = node("r2", Some("r1"), "button", "", 10.0);
@@ -1681,6 +1922,53 @@ mod tests {
         let page = parse_page_from_snapshot(&snapshot(vec![body, button]), Some(1)).unwrap();
         match &page.nodes[0] {
             Node::Button { text, .. } => assert_eq!(text, "Close"),
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn custom_role_tab_is_classified_as_button() {
+        let body = node("r1", None, "body", "", 0.0);
+        let mut tab = node("r2", Some("r1"), "div", "全部", 10.0);
+        tab.attrs.insert("role".into(), "tab".into());
+
+        let page = parse_page_from_snapshot(&snapshot(vec![body, tab]), Some(1)).unwrap();
+        match &page.nodes[0] {
+            Node::Button { id, text } => {
+                assert_eq!(id, "e1");
+                assert_eq!(text, "全部");
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+        assert_eq!(page.element_refs.get("e1").map(String::as_str), Some("r2"));
+    }
+
+    #[test]
+    fn focusable_selected_item_is_classified_as_button() {
+        let body = node("r1", None, "body", "", 0.0);
+        let mut item = node("r2", Some("r1"), "li", "番剧", 10.0);
+        item.attrs.insert("tabindex".into(), "0".into());
+        item.attrs.insert("aria-selected".into(), "false".into());
+
+        let page = parse_page_from_snapshot(&snapshot(vec![body, item]), Some(1)).unwrap();
+        match &page.nodes[0] {
+            Node::Button { id, text } => {
+                assert_eq!(id, "e1");
+                assert_eq!(text, "番剧");
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn tabindex_without_widget_state_stays_non_interactive() {
+        let body = node("r1", None, "body", "", 0.0);
+        let mut item = node("r2", Some("r1"), "div", "只是聚焦容器", 10.0);
+        item.attrs.insert("tabindex".into(), "0".into());
+
+        let page = parse_page_from_snapshot(&snapshot(vec![body, item]), Some(1)).unwrap();
+        match &page.nodes[0] {
+            Node::Text { text, .. } => assert_eq!(text, "只是聚焦容器"),
             other => panic!("unexpected: {other:?}"),
         }
     }

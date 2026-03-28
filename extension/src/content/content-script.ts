@@ -30,8 +30,10 @@ const STABILITY_WINDOW_MS = 500;
 const DEFAULT_WAIT_TIMEOUT_MS = 30_000;
 const TYPE_DELAY_MIN_MS = 40;
 const TYPE_DELAY_MAX_MS = 120;
-const IDLE_PAUSE_MIN_MS = 400;
-const IDLE_PAUSE_MAX_MS = 5000;
+const IDLE_DECISION_INTERVAL_MS = 1000;
+const IDLE_MOVE_MIN_GAP_MS = 2000;
+const IDLE_FORCE_START_MS = 10_000;
+const IDLE_INACTIVITY_STOP_MS = 30_000;
 // Speed in pixels per second — used to compute duration from distance
 const MOVE_SPEED_MIN_PPS = 280;
 const MOVE_SPEED_MAX_PPS = 700;
@@ -70,6 +72,8 @@ class CursorAgent {
   private idleLoopToken = 0;
   private motionToken = 0;
   private hoveredElement: Element | null = null;
+  private lastCliActivityAt = Date.now();
+  private lastIdleMoveFinishedAt = 0;
 
   constructor() {
     document.addEventListener('visibilitychange', () => {
@@ -98,6 +102,8 @@ class CursorAgent {
   start(sessionId: string): void {
     this.enabled = true;
     this.sessionId = sessionId;
+    this.lastCliActivityAt = Date.now();
+    this.lastIdleMoveFinishedAt = Date.now();
     this.ensureCursor();
     const point = this.clampPoint({ x: this.currentX, y: this.currentY });
     this.moveInstant(point.x, point.y);
@@ -135,7 +141,12 @@ class CursorAgent {
       return;
     }
     this.setTaskMode(false);
+    this.lastIdleMoveFinishedAt = Date.now();
     this.startIdleLoop();
+  }
+
+  noteCliActivity(): void {
+    this.lastCliActivityAt = Date.now();
   }
 
   async moveTo(point: Point): Promise<boolean> {
@@ -222,6 +233,9 @@ class CursorAgent {
       x: start.x + (target.x - start.x) * 0.67 + perpX * drift2,
       y: start.y + (target.y - start.y) * 0.67 + perpY * drift2,
     };
+    const wobblePhase = Math.random() * Math.PI * 2;
+    const wobbleAmplitude = Math.min(14, Math.max(2, distance * 0.03));
+    const hesitationStep = steps > 18 ? Math.floor(jitter(steps * 0.25, steps * 0.72)) : -1;
 
     let hovered = this.hoveredElement;
 
@@ -231,12 +245,18 @@ class CursorAgent {
       }
 
       const t = easeInOutCubic(index / steps);
-      const x = cubicBezier(start.x, ctrl1.x, ctrl2.x, target.x, t);
-      const y = cubicBezier(start.y, ctrl1.y, ctrl2.y, target.y, t);
+      const wobble =
+        Math.sin(t * Math.PI * jitter(2.2, 4.4) + wobblePhase) * wobbleAmplitude * (1 - t) * 0.35;
+      const x = cubicBezier(start.x, ctrl1.x, ctrl2.x, target.x, t) + perpX * wobble;
+      const y = cubicBezier(start.y, ctrl1.y, ctrl2.y, target.y, t) + perpY * wobble;
       this.moveInstant(x, y);
       hovered = dispatchCursorMoveEvent(hovered, x, y);
 
-      await delay(jitter(10, 22));
+      if (index === hesitationStep) {
+        await delay(jitter(32, 96));
+      } else {
+        await delay(jitter(10, 22));
+      }
     }
 
     this.hoveredElement = hovered;
@@ -319,14 +339,34 @@ class CursorAgent {
 
   private async runIdleLoop(loopToken: number): Promise<void> {
     while (this.enabled && !this.taskMode && !document.hidden && loopToken === this.idleLoopToken) {
+      const now = Date.now();
+      if (now - this.lastCliActivityAt >= IDLE_INACTIVITY_STOP_MS) {
+        this.stop(this.sessionId ?? undefined);
+        return;
+      }
+
+      const elapsedSinceMove = now - this.lastIdleMoveFinishedAt;
+      if (elapsedSinceMove < IDLE_MOVE_MIN_GAP_MS) {
+        await delay(IDLE_DECISION_INTERVAL_MS);
+        continue;
+      }
+
+      const secondsSinceMove = Math.floor(elapsedSinceMove / IDLE_DECISION_INTERVAL_MS);
+      const shouldStartMove =
+        elapsedSinceMove >= IDLE_FORCE_START_MS || Math.random() < secondsSinceMove / 10;
+
+      if (!shouldStartMove) {
+        await delay(IDLE_DECISION_INTERVAL_MS);
+        continue;
+      }
+
       const point = pickIdlePoint();
       await this.moveTo(point);
+      this.lastIdleMoveFinishedAt = Date.now();
 
       if (!this.enabled || this.taskMode || document.hidden || loopToken !== this.idleLoopToken) {
         return;
       }
-
-      await delay(jitter(IDLE_PAUSE_MIN_MS, IDLE_PAUSE_MAX_MS));
     }
   }
 
@@ -358,6 +398,7 @@ chrome.runtime.onMessage.addListener(
 
 async function handleMessage(req: ContentRequest): Promise<ContentResponse> {
   try {
+    cursorAgent.noteCliActivity();
     switch (req.type) {
       case 'snapshot':
         return await handleSnapshot(req);
@@ -946,9 +987,16 @@ function extractAttrs(element: Element): Record<string, string> {
   maybeSet('placeholder', element.getAttribute('placeholder'));
   maybeSet('name', element.getAttribute('name'));
   maybeSet('role', element.getAttribute('role'));
+  maybeSet('class', element.getAttribute('class'));
+  maybeSet('tabindex', element.getAttribute('tabindex'));
   maybeSet('aria-label', element.getAttribute('aria-label'));
+  maybeSet('aria-selected', element.getAttribute('aria-selected'));
+  maybeSet('aria-pressed', element.getAttribute('aria-pressed'));
+  maybeSet('aria-current', element.getAttribute('aria-current'));
+  maybeSet('aria-expanded', element.getAttribute('aria-expanded'));
   maybeSet('title', element.getAttribute('title'));
-  if (element.hasAttribute('onclick')) {
+  const maybeOnclick = (element as HTMLElement & { onclick?: unknown }).onclick;
+  if (element.hasAttribute('onclick') || typeof maybeOnclick === 'function') {
     attrs.onclick = 'true';
   }
   if (element.hasAttribute('disabled')) {
