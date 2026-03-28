@@ -411,7 +411,18 @@ fn collect_interactive_targets(node: &Node, out: &mut Vec<(String, String)>) {
                 collect_interactive_targets(child, out);
             }
         }
-        Node::Text { .. } | Node::Heading { .. } | Node::Media { .. } => {}
+        Node::Media {
+            id,
+            tag,
+            media_state,
+            ..
+        } => {
+            out.push((
+                id.clone(),
+                join_parts([Some(tag.as_str()), Some(media_state.as_str())]),
+            ));
+        }
+        Node::Text { .. } | Node::Heading { .. } => {}
     }
 }
 
