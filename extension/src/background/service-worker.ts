@@ -10,6 +10,7 @@ import type {
 const NATIVE_HOST = 'com.browser_cli.relay';
 const RECONNECT_BASE_DELAY_MS = 1_000;
 const RECONNECT_MAX_DELAY_MS = 30_000;
+const CLICK_TARGET_GRACE_MS = 250;
 
 const sessions = new Map<string, Session>();
 let port: chrome.runtime.Port | null = null;
@@ -109,38 +110,10 @@ async function handleOpen(req: Request): Promise<Response> {
 
   await waitForTabLoad(tab.id);
 
-  const sessionId =
-    typeof req.params.session_id === 'string' && req.params.session_id.length > 0
-      ? req.params.session_id
-      : `s${Date.now()}`;
-
-  const session: Session = {
-    session_id: sessionId,
-    tab_id: tab.id,
-    url: tab.url ?? url,
-    title: tab.title ?? '',
-    created_at: Date.now(),
-    status: 'active',
-  };
-  sessions.set(sessionId, session);
-
-  await sendToContent(tab.id, {
-    type: 'presence_start',
-    params: {
-      session_id: sessionId,
-      request_id: req.id,
-    },
-  });
-
-  const snapshotResult = await sendToContent(tab.id, {
-    type: 'snapshot',
-    params: {
-      session_id: sessionId,
-      request_id: req.id,
-      wait_after_load: req.params.wait_after_load,
-    },
-  });
+  const session = await createTrackedSession(tab.id, req.id, optionalSessionId(req.params.session_id));
+  const snapshotResult = await requestSessionSnapshot(session, req.id, req.params.wait_after_load);
   if (!snapshotResult.ok) {
+    sessions.delete(session.session_id);
     return { id: req.id, ok: false, error: snapshotResult.error };
   }
 
@@ -251,11 +224,50 @@ async function forwardToContent(req: Request): Promise<Response> {
     },
   };
 
-  const result = await raceWithNavigation(session.value.tab_id, () =>
-    sendToContent(session.value.tab_id, contentReq),
-  );
+  const result =
+    req.action === 'click'
+      ? await raceClickWithContextChange(session.value.tab_id, () =>
+          sendToContent(session.value.tab_id, contentReq),
+        )
+      : await raceWithNavigation(session.value.tab_id, () =>
+          sendToContent(session.value.tab_id, contentReq),
+        );
   if (!result.ok) {
     return { id: req.id, ok: false, error: result.error };
+  }
+
+  if (req.action === 'click' && result.data?.opened_new_target === true) {
+    const targetTabId = result.data.target_tab_id;
+    if (typeof targetTabId !== 'number') {
+      return { id: req.id, ok: false, error: 'Missing target tab for click-opened session' };
+    }
+
+    await ensureTabLoaded(targetTabId);
+
+    const newSession = await createTrackedSession(targetTabId, req.id);
+    const snapshotResult = await requestSessionSnapshot(newSession, req.id);
+    if (!snapshotResult.ok) {
+      sessions.delete(newSession.session_id);
+      return { id: req.id, ok: false, error: snapshotResult.error };
+    }
+
+    const updatedTargetTab = await chrome.tabs.get(targetTabId);
+    newSession.url = updatedTargetTab.url ?? newSession.url;
+    newSession.title = updatedTargetTab.title ?? newSession.title;
+
+    return {
+      id: req.id,
+      ok: true,
+      data: {
+        action: 'click',
+        changed: true,
+        navigated: false,
+        opened_new_session: true,
+        new_session_id: newSession.session_id,
+        url: newSession.url,
+        title: newSession.title,
+      },
+    };
   }
 
   const navigated = result.data && (result.data as Record<string, unknown>).navigated === true;
@@ -295,6 +307,56 @@ function sessionFromRequest(
     return { ok: false, error: `Session not found: ${sessionId}` };
   }
   return { ok: true, value: session };
+}
+
+function optionalSessionId(value: unknown): string | undefined {
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
+function generateSessionId(): string {
+  return `s${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+async function createTrackedSession(
+  tabId: number,
+  requestId: string,
+  sessionId = generateSessionId(),
+): Promise<Session> {
+  const tab = await chrome.tabs.get(tabId);
+  const session: Session = {
+    session_id: sessionId,
+    tab_id: tabId,
+    url: tab.url ?? '',
+    title: tab.title ?? '',
+    created_at: Date.now(),
+    status: tab.status === 'loading' ? 'loading' : 'active',
+  };
+  sessions.set(sessionId, session);
+
+  await sendToContent(tabId, {
+    type: 'presence_start',
+    params: {
+      session_id: sessionId,
+      request_id: requestId,
+    },
+  });
+
+  return session;
+}
+
+function requestSessionSnapshot(
+  session: Session,
+  requestId: string,
+  waitAfterLoad?: unknown,
+): Promise<ContentResponse> {
+  return sendToContent(session.tab_id, {
+    type: 'snapshot',
+    params: {
+      session_id: session.session_id,
+      request_id: requestId,
+      wait_after_load: waitAfterLoad,
+    },
+  });
 }
 
 async function sendToContent(
@@ -418,6 +480,89 @@ function raceWithNavigation(
         resolve({ ok: false, error: err instanceof Error ? err.message : String(err) });
       }
     });
+  });
+}
+
+function raceClickWithContextChange(
+  sourceTabId: number,
+  fn: () => Promise<ContentResponse>,
+): Promise<ContentResponse> {
+  return new Promise((resolve) => {
+    let settled = false;
+    let responseTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const cleanup = () => {
+      chrome.tabs.onUpdated.removeListener(onUpdated);
+      chrome.webNavigation.onCreatedNavigationTarget.removeListener(onCreatedTarget);
+      if (responseTimer !== null) {
+        clearTimeout(responseTimer);
+        responseTimer = null;
+      }
+    };
+
+    const settle = (result: ContentResponse) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup();
+      resolve(result);
+    };
+
+    const onUpdated = (updatedTabId: number, changeInfo: chrome.tabs.OnUpdatedInfo) => {
+      if (updatedTabId !== sourceTabId || settled) return;
+      if (changeInfo.status === 'loading' || changeInfo.url) {
+        waitForTabLoad(sourceTabId)
+          .then(() => chrome.tabs.get(sourceTabId))
+          .then((tab) => {
+            settle({
+              ok: true,
+              data: {
+                navigated: true,
+                changed: true,
+                url: tab.url ?? changeInfo.url ?? '',
+                title: tab.title ?? '',
+              },
+            });
+          })
+          .catch(() => {
+            settle({
+              ok: true,
+              data: { navigated: true, changed: true, url: changeInfo.url ?? '' },
+            });
+          });
+      }
+    };
+
+    const onCreatedTarget = (details: chrome.webNavigation.WebNavigationSourceCallbackDetails) => {
+      if (settled || details.sourceTabId !== sourceTabId) {
+        return;
+      }
+      settle({
+        ok: true,
+        data: {
+          changed: true,
+          navigated: false,
+          opened_new_target: true,
+          target_tab_id: details.tabId,
+          url: details.url,
+        },
+      });
+    };
+
+    chrome.tabs.onUpdated.addListener(onUpdated);
+    chrome.webNavigation.onCreatedNavigationTarget.addListener(onCreatedTarget);
+
+    fn()
+      .then((result) => {
+        if (settled) {
+          return;
+        }
+        responseTimer = setTimeout(() => settle(result), CLICK_TARGET_GRACE_MS);
+      })
+      .catch((err: unknown) => {
+        settle({ ok: false, error: err instanceof Error ? err.message : String(err) });
+      });
   });
 }
 

@@ -21,6 +21,8 @@ struct ActionOutput {
     action: String,
     session_id: String,
     element_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    opened_session_id: Option<String>,
     changed: bool,
     navigated: bool,
     page_updated: bool,
@@ -282,6 +284,11 @@ pub async fn click(
         json!({ "session_id": session_id, "ref": ref_id }),
     ))
     .await?;
+    let opened_session_id = click_data
+        .get("new_session_id")
+        .and_then(|value| value.as_str())
+        .map(str::to_string);
+    let output_session_id = opened_session_id.as_deref().unwrap_or(session_id);
 
     let navigated = click_data
         .get("navigated")
@@ -293,7 +300,11 @@ pub async fn click(
         .unwrap_or(false);
     let should_fetch_page = !options.quiet;
     let updated = if should_fetch_page {
-        Some(fetch_action_page(session_id, page_num, navigated).await?)
+        if opened_session_id.is_some() {
+            Some(resolve_page(output_session_id, None, actions::GET_PAGE).await?)
+        } else {
+            Some(fetch_action_page(output_session_id, page_num, navigated).await?)
+        }
     } else {
         None
     };
@@ -301,9 +312,10 @@ pub async fn click(
         action: "click".into(),
         session_id: session_id.to_string(),
         element_id: element_key.clone(),
+        opened_session_id: opened_session_id.clone(),
         changed,
         navigated,
-        page_updated: changed || navigated,
+        page_updated: changed || navigated || opened_session_id.is_some(),
         url: click_data
             .get("url")
             .and_then(|value| value.as_str())
@@ -318,8 +330,15 @@ pub async fn click(
     if options.json_mode {
         print_json(&output)?;
     } else if options.quiet {
-        println!("click ok: {element_key}");
+        if let Some(opened_session_id) = opened_session_id {
+            println!("click opened session {opened_session_id}: {element_key}");
+        } else {
+            println!("click ok: {element_key}");
+        }
     } else {
+        if let Some(opened_session_id) = &output.opened_session_id {
+            println!("Session {opened_session_id} opened from click: {element_key}\n");
+        }
         println!(
             "{}",
             crate::cli::output::format_page(updated.as_ref().expect("page fetched"), false)
@@ -546,6 +565,7 @@ pub async fn type_text(
         action: "type".into(),
         session_id: session_id.to_string(),
         element_id: element_key.clone(),
+        opened_session_id: None,
         changed,
         navigated,
         page_updated: changed || navigated,
