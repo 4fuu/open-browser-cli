@@ -47,10 +47,12 @@ pub enum Node {
         id: String,
         text: String,
         href: Option<String>,
+        class_name: Option<String>,
     },
     Button {
         id: String,
         text: String,
+        class_name: Option<String>,
     },
     Input {
         id: String,
@@ -92,6 +94,7 @@ pub enum Node {
         children: Vec<Node>,
     },
     Item {
+        class_name: Option<String>,
         children: Vec<Node>,
     },
     Table {
@@ -523,7 +526,7 @@ fn find_view_target_recursive(nodes: &[Node], needle: &str) -> Option<String> {
             }
             Node::Container { children, .. }
             | Node::List { children, .. }
-            | Node::Item { children }
+            | Node::Item { children, .. }
             | Node::Table { children, .. }
             | Node::Row { children }
             | Node::Cell { children } => {
@@ -629,7 +632,7 @@ fn find_context_subtree(
                 return Some(vec![node.clone()]);
             }
         }
-        Node::Item { children } | Node::Row { children } | Node::Cell { children } => {
+        Node::Item { children, .. } | Node::Row { children } | Node::Cell { children } => {
             if subtree_contains_id(children, element_id) {
                 return Some(vec![node.clone()]);
             }
@@ -665,7 +668,7 @@ fn node_contains_id(node: &Node, id: &str) -> bool {
     match node {
         Node::Container { children, .. }
         | Node::List { children, .. }
-        | Node::Item { children }
+        | Node::Item { children, .. }
         | Node::Table { children, .. }
         | Node::Row { children }
         | Node::Cell { children } => subtree_contains_id(children, id),
@@ -959,6 +962,16 @@ fn build_list_item<'a>(
     state: &mut BuildState,
 ) -> Option<Node> {
     let visible_here = intersects_page(&raw.rect, filter.page_top, filter.page_bottom);
+
+    // If the <li> itself carries an interactive signal (e.g. cursor: pointer),
+    // emit it as an interactive element instead of a plain item.
+    if let Some(interactive) = classify_interactive(raw, node_by_ref) {
+        if !visible_here {
+            return None;
+        }
+        return Some(interactive_node(raw, interactive, state));
+    }
+
     let mut children = build_child_nodes(
         raw.ref_id.as_str(),
         children_by_parent,
@@ -975,7 +988,8 @@ fn build_list_item<'a>(
     if children.is_empty() {
         None
     } else {
-        Some(Node::Item { children })
+        let class_name = raw.attrs.get("class").cloned();
+        Some(Node::Item { class_name, children })
     }
 }
 
@@ -1142,10 +1156,11 @@ fn interactive_node(raw: &RawNode, interactive: InteractiveKind, state: &mut Bui
     let id = format!("e{}", state.next_element_id);
     state.next_element_id += 1;
     state.element_refs.insert(id.clone(), raw.ref_id.clone());
+    let class_name = raw.attrs.get("class").cloned();
 
     match interactive {
-        InteractiveKind::Link { text, href } => Node::Link { id, text, href },
-        InteractiveKind::Button { text } => Node::Button { id, text },
+        InteractiveKind::Link { text, href } => Node::Link { id, text, href, class_name },
+        InteractiveKind::Button { text } => Node::Button { id, text, class_name },
         InteractiveKind::Input {
             text,
             input_type,
@@ -1527,7 +1542,7 @@ fn count_node(node: &Node) -> usize {
     1 + match node {
         Node::Container { children, .. }
         | Node::List { children, .. }
-        | Node::Item { children }
+        | Node::Item { children, .. }
         | Node::Table { children, .. }
         | Node::Row { children }
         | Node::Cell { children } => count_nodes(children),
@@ -1541,7 +1556,7 @@ fn estimate_list_page_lines(items: &[Node]) -> usize {
 
 fn estimate_item_lines(item: &Node) -> usize {
     match item {
-        Node::Item { children } => 1 + children.iter().map(estimate_node_lines).sum::<usize>(),
+        Node::Item { children, .. } => 1 + children.iter().map(estimate_node_lines).sum::<usize>(),
         other => estimate_node_lines(other),
     }
 }
@@ -1583,7 +1598,7 @@ fn estimate_node_lines(node: &Node) -> usize {
         | Node::Textarea { .. } => 1,
         Node::Container { children, .. }
         | Node::List { children, .. }
-        | Node::Item { children }
+        | Node::Item { children, .. }
         | Node::Table { children, .. }
         | Node::Row { children }
         | Node::Cell { children } => 2 + children.iter().map(estimate_node_lines).sum::<usize>(),
@@ -1798,7 +1813,7 @@ mod tests {
             Node::Table { children, .. } => match &children[0] {
                 Node::Row { children } => match &children[1] {
                     Node::Cell { children } => match &children[0] {
-                        Node::Link { id, text, href } => {
+                        Node::Link { id, text, href, .. } => {
                             assert_eq!(id, "e1");
                             assert_eq!(text, "Red Desert");
                             assert_eq!(href.as_deref(), Some("/app/1"));
@@ -1872,10 +1887,12 @@ mod tests {
                 current_page: 1,
                 total_pages: 3,
                 children: vec![Node::Item {
+                    class_name: None,
                     children: vec![Node::Link {
                         id: "e1".into(),
                         text: "Visible".into(),
                         href: Some("/visible".into()),
+                        class_name: None,
                     }],
                 }],
             }],
@@ -1886,17 +1903,21 @@ mod tests {
                 StoredBlock::List {
                     items: vec![
                         Node::Item {
+                            class_name: None,
                             children: vec![Node::Link {
                                 id: "e1".into(),
                                 text: "Visible".into(),
                                 href: Some("/visible".into()),
+                                class_name: None,
                             }],
                         },
                         Node::Item {
+                            class_name: None,
                             children: vec![Node::Link {
                                 id: "e2".into(),
                                 text: "Hidden".into(),
                                 href: Some("/hidden".into()),
+                                class_name: None,
                             }],
                         },
                     ],
@@ -1937,7 +1958,7 @@ mod tests {
 
         let page = parse_page_from_snapshot(&snapshot(vec![body, tab]), Some(1)).unwrap();
         match &page.nodes[0] {
-            Node::Button { id, text } => {
+            Node::Button { id, text, .. } => {
                 assert_eq!(id, "e1");
                 assert_eq!(text, "全部");
             }
@@ -1955,7 +1976,7 @@ mod tests {
 
         let page = parse_page_from_snapshot(&snapshot(vec![body, item]), Some(1)).unwrap();
         match &page.nodes[0] {
-            Node::Button { id, text } => {
+            Node::Button { id, text, .. } => {
                 assert_eq!(id, "e1");
                 assert_eq!(text, "番剧");
             }
@@ -1971,7 +1992,7 @@ mod tests {
 
         let page = parse_page_from_snapshot(&snapshot(vec![body, item]), Some(1)).unwrap();
         match &page.nodes[0] {
-            Node::Button { id, text } => {
+            Node::Button { id, text, .. } => {
                 assert_eq!(id, "e1");
                 assert_eq!(text, "番剧");
             }
@@ -1987,6 +2008,39 @@ mod tests {
 
         let page = parse_page_from_snapshot(&snapshot(vec![body, item]), Some(1)).unwrap();
         assert!(page.nodes.is_empty() || !matches!(&page.nodes[0], Node::Button { .. }));
+    }
+
+    #[test]
+    fn cursor_pointer_li_in_list_becomes_button() {
+        let body = node("r1", None, "body", "", 0.0);
+        let ul = node("r2", Some("r1"), "ul", "", 10.0);
+        let mut li1 = node("r3", Some("r2"), "li", "全部", 10.0);
+        li1.attrs.insert("cursor".into(), "pointer".into());
+        let mut li2 = node("r4", Some("r2"), "li", "番剧", 30.0);
+        li2.attrs.insert("cursor".into(), "pointer".into());
+
+        let page =
+            parse_page_from_snapshot(&snapshot(vec![body, ul, li1, li2]), Some(1)).unwrap();
+        match &page.nodes[0] {
+            Node::List { children, .. } => {
+                assert!(children.len() >= 2);
+                match &children[0] {
+                    Node::Button { id, text, .. } => {
+                        assert_eq!(id, "e1");
+                        assert_eq!(text, "全部");
+                    }
+                    other => panic!("expected Button for li1, got: {other:?}"),
+                }
+                match &children[1] {
+                    Node::Button { id, text, .. } => {
+                        assert_eq!(id, "e2");
+                        assert_eq!(text, "番剧");
+                    }
+                    other => panic!("expected Button for li2, got: {other:?}"),
+                }
+            }
+            other => panic!("expected List, got: {other:?}"),
+        }
     }
 
     #[test]

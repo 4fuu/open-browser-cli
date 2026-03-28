@@ -486,7 +486,7 @@ fn find_interactive_recursive(nodes: &[Node], needle: &str) -> Option<String> {
             }
             Node::Container { children, .. }
             | Node::List { children, .. }
-            | Node::Item { children }
+            | Node::Item { children, .. }
             | Node::Table { children, .. }
             | Node::Row { children }
             | Node::Cell { children } => {
@@ -519,7 +519,7 @@ fn link_href_by_nodes<'a>(nodes: &'a [Node], element_id: &str) -> Option<&'a str
             Node::Link { id, href, .. } if id == element_id => return href.as_deref(),
             Node::Container { children, .. }
             | Node::List { children, .. }
-            | Node::Item { children }
+            | Node::Item { children, .. }
             | Node::Table { children, .. }
             | Node::Row { children }
             | Node::Cell { children } => {
@@ -539,7 +539,7 @@ fn link_href_in_nodes<'a>(nodes: &'a [Node], element_id: &str) -> Option<&'a str
             Node::Link { id, href, .. } if id == element_id => return href.as_deref(),
             Node::Container { children, .. }
             | Node::List { children, .. }
-            | Node::Item { children }
+            | Node::Item { children, .. }
             | Node::Table { children, .. }
             | Node::Row { children }
             | Node::Cell { children } => {
@@ -1147,6 +1147,7 @@ mod tests {
             Node::Button {
                 id: "e1".into(),
                 text: "Submit".into(),
+                class_name: None,
             },
             Node::Container {
                 tag: "section".into(),
@@ -1157,11 +1158,13 @@ mod tests {
                         id: "e2".into(),
                         text: "Docs".into(),
                         href: Some("/docs".into()),
+                        class_name: None,
                     },
                     Node::Link {
                         id: "e3".into(),
                         text: "Broken".into(),
                         href: None,
+                        class_name: None,
                     },
                 ],
             },
@@ -1204,10 +1207,12 @@ mod tests {
                 current_page: 1,
                 total_pages: 2,
                 children: vec![Node::Item {
+                    class_name: None,
                     children: vec![Node::Link {
                         id: "e1".into(),
                         text: "Visible".into(),
                         href: Some("/visible".into()),
+                        class_name: None,
                     }],
                 }],
             }],
@@ -1218,17 +1223,21 @@ mod tests {
                 StoredBlock::List {
                     items: vec![
                         Node::Item {
+                            class_name: None,
                             children: vec![Node::Link {
                                 id: "e1".into(),
                                 text: "Visible".into(),
                                 href: Some("/visible".into()),
+                                class_name: None,
                             }],
                         },
                         Node::Item {
+                            class_name: None,
                             children: vec![Node::Link {
                                 id: "e2".into(),
                                 text: "Hidden".into(),
                                 href: Some("/hidden".into()),
+                                class_name: None,
                             }],
                         },
                     ],

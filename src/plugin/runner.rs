@@ -348,13 +348,13 @@ fn interactive_targets(node: &Node) -> Vec<(String, String)> {
 
 fn collect_interactive_targets(node: &Node, out: &mut Vec<(String, String)>) {
     match node {
-        Node::Link { id, text, href } => {
+        Node::Link { id, text, href, .. } => {
             out.push((
                 id.clone(),
                 join_parts([Some(text.as_str()), href.as_deref()]),
             ));
         }
-        Node::Button { id, text } => {
+        Node::Button { id, text, .. } => {
             out.push((id.clone(), text.clone()));
         }
         Node::Input {
@@ -403,7 +403,7 @@ fn collect_interactive_targets(node: &Node, out: &mut Vec<(String, String)>) {
         }
         Node::Container { children, .. }
         | Node::List { children, .. }
-        | Node::Item { children }
+        | Node::Item { children, .. }
         | Node::Table { children, .. }
         | Node::Row { children }
         | Node::Cell { children } => {
@@ -437,7 +437,7 @@ fn node_text(node: &Node) -> String {
         ]),
         Node::Container { children, .. }
         | Node::List { children, .. }
-        | Node::Item { children }
+        | Node::Item { children, .. }
         | Node::Table { children, .. }
         | Node::Row { children }
         | Node::Cell { children } => children
