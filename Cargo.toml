@@ -15,6 +15,7 @@ toml = "0.9"
 anyhow = "1.0"
 uuid = { version = "1.0", features = ["v4"] }
 url = "2.5"
+base64 = "0.22"
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.52"

@@ -920,6 +920,75 @@ pub fn plugin_list(json_mode: bool) -> Result<()> {
     Ok(())
 }
 
+pub async fn screenshot(
+    session_id: &str,
+    output: Option<&str>,
+    full_page: bool,
+    quality: Option<u32>,
+    json_mode: bool,
+) -> Result<()> {
+    use base64::Engine as _;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    if full_page {
+        eprintln!("Warning: --full-page is not yet supported; capturing viewport only.");
+    }
+
+    let mut params = json!({ "session_id": session_id, "full_page": false });
+    if let Some(q) = quality {
+        params["quality"] = json!(q);
+    }
+
+    let data = send_ok(Request::new(actions::SCREENSHOT, params)).await?;
+
+    let image_b64 = data
+        .get("image")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow::anyhow!("missing image data in response"))?;
+    let format = data
+        .get("format")
+        .and_then(|v| v.as_str())
+        .unwrap_or("png");
+
+    let image_bytes = base64::engine::general_purpose::STANDARD
+        .decode(image_b64)
+        .map_err(|e| anyhow::anyhow!("failed to decode base64 image: {e}"))?;
+
+    let extension = if format == "jpeg" { "jpg" } else { "png" };
+    let output_path = match output {
+        Some(p) => PathBuf::from(p),
+        None => {
+            let ts = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis();
+            PathBuf::from(format!("screenshot-{ts}.{extension}"))
+        }
+    };
+
+    fs::write(&output_path, &image_bytes)?;
+
+    let size_bytes = image_bytes.len();
+
+    if json_mode {
+        print_json(&json!({
+            "session_id": session_id,
+            "path": output_path.display().to_string(),
+            "format": format,
+            "size_bytes": size_bytes,
+        }))?;
+    } else {
+        println!(
+            "Screenshot saved: {} ({} bytes, {})",
+            output_path.display(),
+            size_bytes,
+            format
+        );
+    }
+
+    Ok(())
+}
+
 async fn fetch_snapshot(
     session_id: &str,
     action: &str,
