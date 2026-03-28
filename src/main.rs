@@ -344,9 +344,12 @@ async fn main() -> anyhow::Result<()> {
                 .or_else(|| manifest_path.clone());
             cli::commands::teardown(browser, resolved_path.as_deref())?
         }
-        Command::Open { ref url, wait, quiet, json } => {
-            cli::commands::open(url, wait, quiet, json).await?
-        }
+        Command::Open {
+            ref url,
+            wait,
+            quiet,
+            json,
+        } => cli::commands::open(url, wait, quiet, json).await?,
         Command::Close {
             ref session_id,
             all,
@@ -420,16 +423,7 @@ async fn main() -> anyhow::Result<()> {
             quiet,
             json,
             ..
-        } => {
-            cli::commands::wait(
-                session_id,
-                for_text.as_deref(),
-                timeout,
-                quiet,
-                json,
-            )
-            .await?
-        }
+        } => cli::commands::wait(session_id, for_text.as_deref(), timeout, quiet, json).await?,
         Command::Text {
             ref session_id,
             ref text_id,
@@ -445,9 +439,15 @@ async fn main() -> anyhow::Result<()> {
             all,
             fresh,
             json,
-        } => cli::commands::block(session_id, block_id, source_page, page, all, fresh, json).await?,
+        } => {
+            cli::commands::block(session_id, block_id, source_page, page, all, fresh, json).await?
+        }
         Command::View {
-            ref session_id, ref target, page, fresh, json,
+            ref session_id,
+            ref target,
+            page,
+            fresh,
+            json,
         } => cli::commands::view(session_id, target, page, fresh, json).await?,
         Command::Plugin { ref cmd } => match cmd {
             PluginCommand::Run {
