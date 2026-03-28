@@ -414,6 +414,33 @@ fn render_node(
         }
         Node::Row { children } => render_row(out, children, indent),
         Node::Cell { children } => render_cell(out, children, indent),
+        Node::Media {
+            id,
+            tag,
+            media_state,
+            current_time,
+            duration,
+            muted,
+            resolution,
+        } => {
+            out.push_str(&format!(
+                "{indent_str}<media id=\"{}\" tag=\"{}\" state=\"{}\" time=\"{}\"",
+                escape_xml(id),
+                escape_xml(tag),
+                escape_xml(media_state),
+                current_time,
+            ));
+            if let Some(dur) = duration {
+                out.push_str(&format!(" duration=\"{}\"", dur));
+            }
+            if *muted {
+                out.push_str(" muted=\"true\"");
+            }
+            if let Some(res) = resolution {
+                out.push_str(&format!(" resolution=\"{}\"", escape_xml(res)));
+            }
+            out.push_str("/>\n");
+        }
     }
 }
 
@@ -611,6 +638,7 @@ fn node_type_tag(node: &Node) -> &str {
         Node::Table { .. } => "table",
         Node::Row { .. } => "row",
         Node::Cell { .. } => "cell",
+        Node::Media { .. } => "media",
     }
 }
 
@@ -691,6 +719,7 @@ fn item_can_inline_single_child(node: &Node) -> bool {
             | Node::Radio { .. }
             | Node::Select { .. }
             | Node::Textarea { .. }
+            | Node::Media { .. }
     )
 }
 
@@ -1156,5 +1185,42 @@ mod tests {
         // Different structure → both keep class
         assert!(xml.contains("class=\"type-a\""));
         assert!(xml.contains("class=\"type-b\""));
+    }
+
+    #[test]
+    fn render_xml_media_node_with_all_fields() {
+        let xml = render_xml(&page(vec![Node::Media {
+            id: "e1".into(),
+            tag: "video".into(),
+            media_state: "playing".into(),
+            current_time: 42,
+            duration: Some(120),
+            muted: true,
+            resolution: Some("1920x1080".into()),
+        }]));
+
+        assert!(xml.contains(
+            "<media id=\"e1\" tag=\"video\" state=\"playing\" time=\"42\" duration=\"120\" muted=\"true\" resolution=\"1920x1080\"/>"
+        ));
+    }
+
+    #[test]
+    fn render_xml_media_node_minimal_fields() {
+        let xml = render_xml(&page(vec![Node::Media {
+            id: "e2".into(),
+            tag: "audio".into(),
+            media_state: "paused".into(),
+            current_time: 0,
+            duration: None,
+            muted: false,
+            resolution: None,
+        }]));
+
+        assert!(xml.contains(
+            "<media id=\"e2\" tag=\"audio\" state=\"paused\" time=\"0\"/>"
+        ));
+        assert!(!xml.contains("duration="));
+        assert!(!xml.contains("muted="));
+        assert!(!xml.contains("resolution="));
     }
 }

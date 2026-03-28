@@ -411,6 +411,17 @@ fn collect_interactive_targets(node: &Node, out: &mut Vec<(String, String)>) {
                 collect_interactive_targets(child, out);
             }
         }
+        Node::Media {
+            id,
+            tag,
+            media_state,
+            ..
+        } => {
+            out.push((
+                id.clone(),
+                join_parts([Some(tag.as_str()), Some(media_state.as_str())]),
+            ));
+        }
         Node::Text { .. } | Node::Heading { .. } => {}
     }
 }
@@ -446,6 +457,7 @@ fn node_text(node: &Node) -> String {
             .filter(|value| !value.is_empty())
             .collect::<Vec<_>>()
             .join(" "),
+        Node::Media { tag, media_state, .. } => format!("{} ({})", tag, media_state),
     }
 }
 

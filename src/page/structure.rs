@@ -112,6 +112,15 @@ pub enum Node {
     Cell {
         children: Vec<Node>,
     },
+    Media {
+        id: String,
+        tag: String,
+        media_state: String,
+        current_time: u64,
+        duration: Option<u64>,
+        muted: bool,
+        resolution: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -780,7 +789,8 @@ fn node_has_id(node: &Node, id: &str) -> bool {
         | Node::Checkbox { id: nid, .. }
         | Node::Radio { id: nid, .. }
         | Node::Select { id: nid, .. }
-        | Node::Textarea { id: nid, .. } => nid == id,
+        | Node::Textarea { id: nid, .. }
+        | Node::Media { id: nid, .. } => nid == id,
         Node::Text { id: Some(nid), .. } => nid == id,
         Node::List { id: Some(nid), .. } | Node::Table { id: Some(nid), .. } => nid == id,
         _ => false,
@@ -920,6 +930,45 @@ fn build_node<'a>(
         "table" => {
             let table = build_table_node(raw, children_by_parent, node_by_ref, filter, state)?;
             return Some(table);
+        }
+        "audio" | "video" if raw.attrs.contains_key("media-state") => {
+            if !visible_here {
+                return None;
+            }
+            let id = format!("e{}", state.next_element_id);
+            state.next_element_id += 1;
+            state
+                .element_refs
+                .insert(id.clone(), raw.ref_id.clone());
+            let media_state = raw
+                .attrs
+                .get("media-state")
+                .cloned()
+                .unwrap_or_else(|| "paused".to_string());
+            let current_time = raw
+                .attrs
+                .get("media-current-time")
+                .and_then(|v| v.parse::<u64>().ok())
+                .unwrap_or(0);
+            let duration = raw
+                .attrs
+                .get("media-duration")
+                .and_then(|v| v.parse::<u64>().ok());
+            let muted = raw
+                .attrs
+                .get("media-muted")
+                .map(|v| v == "true")
+                .unwrap_or(false);
+            let resolution = raw.attrs.get("media-resolution").cloned();
+            return Some(Node::Media {
+                id,
+                tag: raw.tag.clone(),
+                media_state,
+                current_time,
+                duration,
+                muted,
+                resolution,
+            });
         }
         _ => {}
     }
@@ -1725,7 +1774,8 @@ fn estimate_node_lines(node: &Node) -> usize {
         | Node::Checkbox { .. }
         | Node::Radio { .. }
         | Node::Select { .. }
-        | Node::Textarea { .. } => 1,
+        | Node::Textarea { .. }
+        | Node::Media { .. } => 1,
         Node::Container { children, .. }
         | Node::List { children, .. }
         | Node::Item { children, .. }
@@ -2188,6 +2238,95 @@ mod tests {
         match &page.nodes[0] {
             Node::Text { text, .. } => assert_eq!(text, "只是聚焦容器"),
             other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn audio_with_media_state_becomes_media_node() {
+        let body = node("r1", None, "body", "", 0.0);
+        let mut audio = node("r2", Some("r1"), "audio", "", 10.0);
+        audio.attrs.insert("media-state".into(), "playing".into());
+        audio
+            .attrs
+            .insert("media-current-time".into(), "30".into());
+        audio.attrs.insert("media-duration".into(), "180".into());
+        audio.attrs.insert("media-muted".into(), "true".into());
+
+        let page = parse_page_from_snapshot(&snapshot(vec![body, audio]), Some(1)).unwrap();
+        match &page.nodes[0] {
+            Node::Media {
+                id,
+                tag,
+                media_state,
+                current_time,
+                duration,
+                muted,
+                resolution,
+            } => {
+                assert_eq!(id, "e1");
+                assert_eq!(tag, "audio");
+                assert_eq!(media_state, "playing");
+                assert_eq!(*current_time, 30);
+                assert_eq!(*duration, Some(180));
+                assert!(*muted);
+                assert!(resolution.is_none());
+            }
+            other => panic!("expected Media, got: {other:?}"),
+        }
+        assert_eq!(page.element_refs.get("e1").map(String::as_str), Some("r2"));
+    }
+
+    #[test]
+    fn video_with_all_media_attrs_becomes_media_node() {
+        let body = node("r1", None, "body", "", 0.0);
+        let mut video = node("r2", Some("r1"), "video", "", 10.0);
+        video.attrs.insert("media-state".into(), "playing".into());
+        video
+            .attrs
+            .insert("media-current-time".into(), "42".into());
+        video.attrs.insert("media-duration".into(), "120".into());
+        video.attrs.insert("media-muted".into(), "false".into());
+        video
+            .attrs
+            .insert("media-resolution".into(), "1920x1080".into());
+
+        let page = parse_page_from_snapshot(&snapshot(vec![body, video]), Some(1)).unwrap();
+        match &page.nodes[0] {
+            Node::Media {
+                id,
+                tag,
+                media_state,
+                current_time,
+                duration,
+                muted,
+                resolution,
+            } => {
+                assert_eq!(id, "e1");
+                assert_eq!(tag, "video");
+                assert_eq!(media_state, "playing");
+                assert_eq!(*current_time, 42);
+                assert_eq!(*duration, Some(120));
+                assert!(!*muted);
+                assert_eq!(resolution.as_deref(), Some("1920x1080"));
+            }
+            other => panic!("expected Media, got: {other:?}"),
+        }
+        assert_eq!(page.element_refs.get("e1").map(String::as_str), Some("r2"));
+    }
+
+    #[test]
+    fn video_without_media_state_is_not_media_node() {
+        let body = node("r1", None, "body", "", 0.0);
+        let video = node("r2", Some("r1"), "video", "Some video text", 10.0);
+
+        let page = parse_page_from_snapshot(&snapshot(vec![body, video]), Some(1)).unwrap();
+        // Without media-state attr, the video element should fall through
+        // to normal node handling (e.g. Text or Container), not Media.
+        for n in &page.nodes {
+            assert!(
+                !matches!(n, Node::Media { .. }),
+                "video without media-state should not produce Media node"
+            );
         }
     }
 }
