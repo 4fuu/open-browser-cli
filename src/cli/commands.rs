@@ -353,8 +353,7 @@ fn resolve_element_target(
     session_id: &str,
     page_num: Option<u32>,
 ) -> Result<(String, String)> {
-    if let Ok(num) = target.parse::<u32>() {
-        let element_key = format!("e{num}");
+    if let Some(element_key) = normalize_element_target(target) {
         let ref_id = page
             .element_refs
             .get(&element_key)
@@ -377,6 +376,51 @@ fn resolve_element_target(
         .ok_or_else(|| element_lookup_error(session_id, page_num, &found))?;
 
     Ok((found, ref_id))
+}
+
+fn normalize_element_target(target: &str) -> Option<String> {
+    if let Some(rest) = target.strip_prefix('e')
+        && !rest.is_empty()
+        && rest.chars().all(|ch| ch.is_ascii_digit())
+    {
+        return Some(format!("e{rest}"));
+    }
+
+    if target.chars().all(|ch| ch.is_ascii_digit()) {
+        return Some(format!("e{target}"));
+    }
+
+    None
+}
+
+fn normalize_text_target(target: &str) -> Option<String> {
+    if let Some(rest) = target.strip_prefix('t')
+        && !rest.is_empty()
+        && rest.chars().all(|ch| ch.is_ascii_digit())
+    {
+        return Some(format!("t{rest}"));
+    }
+
+    if target.chars().all(|ch| ch.is_ascii_digit()) {
+        return Some(format!("t{target}"));
+    }
+
+    None
+}
+
+fn normalize_block_target(target: &str) -> Option<String> {
+    if let Some(rest) = target.strip_prefix('b')
+        && !rest.is_empty()
+        && rest.chars().all(|ch| ch.is_ascii_digit())
+    {
+        return Some(format!("b{rest}"));
+    }
+
+    if target.chars().all(|ch| ch.is_ascii_digit()) {
+        return Some(format!("b{target}"));
+    }
+
+    None
 }
 
 fn find_interactive_by_query(page: &PageData, query: &str) -> Option<String> {
@@ -750,6 +794,7 @@ pub async fn text(
     fresh: bool,
     json_mode: bool,
 ) -> Result<()> {
+    let text_id = normalize_text_target(text_id).unwrap_or_else(|| text_id.to_string());
     let page = resolve_page(
         session_id,
         page_num,
@@ -762,9 +807,9 @@ pub async fn text(
     .await?;
     let full_text = page
         .full_texts
-        .get(text_id)
+        .get(&text_id)
         .cloned()
-        .ok_or_else(|| text_lookup_error(session_id, page_num, text_id))?;
+        .ok_or_else(|| text_lookup_error(session_id, page_num, &text_id))?;
 
     if json_mode {
         print_json(&json!({
@@ -787,6 +832,7 @@ pub async fn block(
     fresh: bool,
     json_mode: bool,
 ) -> Result<()> {
+    let block_id = normalize_block_target(block_id).unwrap_or_else(|| block_id.to_string());
     let page = resolve_page(
         session_id,
         source_page,
@@ -799,12 +845,12 @@ pub async fn block(
     .await?;
 
     if all {
-        let block = resolve_block_all(&page, block_id)
-            .ok_or_else(|| block_lookup_error(session_id, source_page, block_id))?;
+        let block = resolve_block_all(&page, &block_id)
+            .ok_or_else(|| block_lookup_error(session_id, source_page, &block_id))?;
         println!("{}", crate::cli::output::format_block(&block, json_mode));
     } else {
-        let block = resolve_block(&page, block_id, page_num)
-            .ok_or_else(|| block_lookup_error(session_id, source_page, block_id))?;
+        let block = resolve_block(&page, &block_id, page_num)
+            .ok_or_else(|| block_lookup_error(session_id, source_page, &block_id))?;
         println!("{}", crate::cli::output::format_block(&block, json_mode));
     }
     Ok(())
@@ -1215,6 +1261,41 @@ mod tests {
         let text = err.to_string();
         assert!(text.contains("browser-cli page s1 -p 3"));
         assert!(text.contains("--fresh"));
+    }
+
+    #[test]
+    fn resolve_element_target_accepts_prefixed_id() {
+        let page = PageData {
+            url: "https://example.com".into(),
+            title: "Example".into(),
+            current_page: 1,
+            total_pages: 1,
+            truncated: false,
+            shown: 0,
+            total: 0,
+            nodes: vec![],
+            element_refs: std::collections::HashMap::from([("e28".into(), "r28".into())]),
+            full_texts: Default::default(),
+            full_blocks: Default::default(),
+        };
+
+        let (element_id, ref_id) = resolve_element_target("e28", &page, "s1", None).unwrap();
+        assert_eq!(element_id, "e28");
+        assert_eq!(ref_id, "r28");
+    }
+
+    #[test]
+    fn normalize_text_target_accepts_prefixed_and_numeric_ids() {
+        assert_eq!(normalize_text_target("t7").as_deref(), Some("t7"));
+        assert_eq!(normalize_text_target("7").as_deref(), Some("t7"));
+        assert_eq!(normalize_text_target("x7"), None);
+    }
+
+    #[test]
+    fn normalize_block_target_accepts_prefixed_and_numeric_ids() {
+        assert_eq!(normalize_block_target("b4").as_deref(), Some("b4"));
+        assert_eq!(normalize_block_target("4").as_deref(), Some("b4"));
+        assert_eq!(normalize_block_target("x4"), None);
     }
 
     #[test]

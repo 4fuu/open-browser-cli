@@ -132,7 +132,7 @@ enum Command {
     Click {
         /// Session ID
         session_id: String,
-        /// Element ID (number) or text query to find element
+        /// Element ID (`e28` / `28`) or text query to find element
         target: String,
         /// Page number used to resolve element IDs
         #[arg(short, long)]
@@ -157,7 +157,7 @@ enum Command {
     Type {
         /// Session ID
         session_id: String,
-        /// Element ID (number) or text query to find element
+        /// Element ID (`e28` / `28`) or text query to find element
         target: String,
         /// Text to type
         text: String,
@@ -214,7 +214,7 @@ enum Command {
     Text {
         /// Session ID
         session_id: String,
-        /// Text ID returned in page output
+        /// Text ID returned in page output (`t1` / `1`)
         text_id: String,
         /// Page number used to resolve text IDs
         #[arg(short, long)]
@@ -230,7 +230,7 @@ enum Command {
     Block {
         /// Session ID
         session_id: String,
-        /// Block ID returned in page output
+        /// Block ID returned in page output (`b1` / `1`)
         block_id: String,
         /// Source page number used to resolve block IDs from page output (defaults to current scroll position)
         #[arg(long)]

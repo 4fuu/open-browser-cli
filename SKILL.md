@@ -10,8 +10,8 @@ description: "Drives a real browser session via browser-cli: open stateful sessi
 ## Core rules
 
 - Always fetch the current page before interacting. Element IDs are reassigned on every `page`.
-- `click` and `type` accept either the numeric part of an element ID (`e3` becomes `3`) or a text query matched against the current page's interactive elements.
-- `text` and `block` use full IDs such as `t1` and `b1`.
+- `click` and `type` accept either a full element ID (`e3`), the numeric part (`3`), or a text query matched against the current page's interactive elements.
+- `text` and `block` accept either full IDs such as `t1` / `b1` or their numeric parts (`1`).
 - Prefer `--json` when another tool or agent will consume the result.
 - Use `--fresh` when the cache may be stale or the page is highly dynamic.
 - `open`, `click`, `type`, and `wait` return the current page by default; use `--quiet` when you only need a compact success result.
@@ -109,12 +109,14 @@ If page text is truncated, fetch the full text by `text_id`:
 
 ```bash
 browser-cli text s123 t1
+browser-cli text s123 1
 ```
 
 If a list or table is block-paginated, continue reading with `block`:
 
 ```bash
 browser-cli block s123 b1 --source-page 1 -p 2
+browser-cli block s123 1 --source-page 1 -p 2
 browser-cli block s123 b1 --all
 ```
 
@@ -150,9 +152,9 @@ browser-cli type s123 3 "hello world" --quiet
 
 ## Page interpretation notes
 
-- Interactive elements are exposed as short IDs like `e1`, `e2`, `e3`.
-- Long text may be truncated in-page and assigned `t1`, `t2`, etc.
-- Large lists or tables may be exposed as block IDs `b1`, `b2`, etc.
+- Interactive elements are exposed as short IDs like `e1`, `e2`, `e3`; `click` / `type` accept either `e3` or `3`.
+- Long text may be truncated in-page and assigned `t1`, `t2`, etc.; `text` accepts either `t1` or `1`.
+- Large lists or tables may be exposed as block IDs `b1`, `b2`, etc.; `block` accepts either `b1` or `1`.
 - Pagination is viewport-based. `page -p N` reads a logical page slice without scrolling the browser manually.
 
 ## Plugin usage

@@ -102,14 +102,24 @@ browser-cli open https://example.com
 # Inspect the structured page
 browser-cli page s1234567890
 
-# Click an element (e1 means element 1 from page output)
+# Click an element (`e1` or `1` both work)
 browser-cli click s1234567890 1
+browser-cli click s1234567890 e1
 
 # If the target is a link, open it in a new session and keep the current page unchanged
 browser-cli click s1234567890 1 --new-session
 
-# Type into an input
+# Type into an input (`e3` or `3` both work)
 browser-cli type s1234567890 3 "hello world"
+browser-cli type s1234567890 e3 "hello world"
+
+# Read truncated text (`t1` or `1` both work)
+browser-cli text s1234567890 t1
+browser-cli text s1234567890 1
+
+# Read a paginated block (`b1` or `1` both work)
+browser-cli block s1234567890 b1 --source-page 1 -p 2
+browser-cli block s1234567890 1 --source-page 1 --all
 
 # Close the session
 browser-cli close s1234567890
@@ -124,10 +134,11 @@ browser-cli close <session-id>
 browser-cli close --all
 
 browser-cli page <session-id> [-p <page>] [--next] [--prev] [--fresh] [--json]
-browser-cli click <session-id> <element-id> [-p <page>] [--new-session]
-browser-cli type <session-id> <element-id> <text> [-p <page>]
+browser-cli click <session-id> <element-id|number|query> [-p <page>] [--new-session]
+browser-cli type <session-id> <element-id|number|query> <text> [-p <page>]
 browser-cli search <session-id> <query>
-browser-cli text <session-id> <text-id> [-p <page>]
+browser-cli text <session-id> <text-id|number> [-p <page>]
+browser-cli block <session-id> <block-id|number> [--source-page <page>] [(-p <block-page>)|--all] [--fresh] [--json]
 browser-cli wait <session-id> [--selector <css-selector>] [--timeout <ms>]
 
 browser-cli plugin list
@@ -154,8 +165,9 @@ browser-cli teardown [--browser chrome|firefox]
 </page>
 ```
 
-- `e1`, `e2`, ... are interactive element IDs for `click` and `type`
-- `t1`, `t2`, ... are IDs for truncated text blocks, readable with `text`
+- `e1`, `e2`, ... are interactive element IDs for `click` and `type`; both `e1` and `1` are accepted
+- `t1`, `t2`, ... are IDs for truncated text blocks, readable with `text`; both `t1` and `1` are accepted
+- `b1`, `b2`, ... are IDs for paginated list/table blocks, readable with `block`; both `b1` and `1` are accepted
 - `--next` and `--prev` paginate relative to the current scroll position
 - `--fresh` bypasses the Relay cache and fetches a fresh browser snapshot
 - `click --new-session` only works for links with an `href`; the CLI resolves relative links against the current page URL and opens a brand new session
