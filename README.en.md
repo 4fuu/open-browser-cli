@@ -148,13 +148,13 @@ browser-cli close <session-id> [--json]
 browser-cli close --all [--json]
 browser-cli --version
 
-browser-cli page <session-id> [-p <page>] [--next] [--prev] [--fresh] [--json]
+browser-cli page <session-id> [-p <page>] [--next] [--prev] [--fresh] [--json] [--verbose]
 browser-cli click <session-id> <element-id|number|query> [-p <page>] [--new-session] [--fresh] [--quiet] [--json]
 browser-cli type <session-id> <element-id|number|query> <text> [-p <page>] [--fresh] [--quiet] [--json]
-browser-cli search <session-id> <query> [--fresh] [--json]
+browser-cli search <session-id> <query> [--fresh] [--json] [--verbose]
 browser-cli text <session-id> <text-id|number> [-p <page>] [--fresh] [--json]
-browser-cli block <session-id> <block-id|number> [--source-page <page>] [(-p <block-page>)|--all] [--fresh] [--json]
-browser-cli view <session-id> <element-id|number|query> [-p <page>] [--fresh] [--json]
+browser-cli block <session-id> <block-id|number> [--source-page <page>] [(-p <block-page>)|--all] [--fresh] [--json] [--verbose]
+browser-cli view <session-id> <element-id|number|query> [-p <page>] [--fresh] [--json] [--verbose]
 browser-cli wait <session-id> [--for <text>] [--timeout <ms>] [--quiet] [--json]
 
 browser-cli plugin list [--json]
@@ -189,12 +189,14 @@ browser-cli teardown [--browser chrome|firefox]
 - `--version` prints the version injected at build time, or `unknown` if not set
 - `open` returns the page structure by default; use `--quiet` for session info only, `--wait 0` to skip the post-open stability wait
 - `open` / `close` / `list` / `search` / `wait` / `plugin` / `view` all support `--json`
+- `page` / `search` / `block` / `view` support `--verbose`; this mainly matters for JSON mode, where the default `--json` output is compact and `--verbose` returns full detail
 - The `<target>` for `click` / `type` accepts a prefixed ID (`e1`), a bare number (`1` maps to `e1`), or a text query matching button text, link text, or input placeholder/value
 - `click` / `type` output the updated full page XML by default; use `--quiet` for a success summary, `--json` for a structured response
 - `wait` returns the latest page on success; use `--quiet` in automation pipelines when you only need the success/timeout result
-- `search` returns `page`, `tag`, a context snippet, and `element_id` when the match is an interactive element
+- `search` still returns `page`, `tag`, a context snippet, and `element_id` in plain text mode; in `--json` mode it returns a compact result by default, and the full match structure with `--verbose`
 - Truncated text is shown as `[...truncated]`; oversized `list` / `table` blocks are paginated by XML line budget rather than item count — use `block --source-page <page> -p <block-page>` to read a single page, or `--all` to expand the entire block
 - `view` returns a focused view of an element, truncated text, or block; target accepts `e3`, `3`, `t1`, `b1`, or a text query
+- When `view` targets an element inside a list or table, it returns only the matching `item` / `row` by default; add `--verbose` to keep the full list/table context
 - `click --new-session` only works for links with an `href`; the CLI resolves the URL and opens a new session, leaving the current page unchanged
 
 ### Plugins

@@ -159,6 +159,38 @@ pub struct SearchResults {
     pub matches: Vec<SearchMatch>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct CompactSearchMatch {
+    pub page: u32,
+    pub element_id: Option<String>,
+    pub tag: String,
+    pub context: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CompactSearchResults {
+    pub query: String,
+    pub matches: Vec<CompactSearchMatch>,
+}
+
+impl SearchResults {
+    pub fn to_compact(&self) -> CompactSearchResults {
+        CompactSearchResults {
+            query: self.query.clone(),
+            matches: self
+                .matches
+                .iter()
+                .map(|m| CompactSearchMatch {
+                    page: m.page,
+                    element_id: m.element_id.clone(),
+                    tag: m.tag.clone(),
+                    context: m.context.clone(),
+                })
+                .collect(),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 enum InteractiveKind {
     Link {
@@ -332,7 +364,7 @@ pub struct ViewData {
     pub nodes: Vec<Node>,
 }
 
-pub fn extract_view(page: &PageData, target: &str) -> Result<ViewData> {
+pub fn extract_view(page: &PageData, target: &str, verbose: bool) -> Result<ViewData> {
     // Case 1: Block ID (b1, b2, ...) — auto-expand all pages
     if target.starts_with('b') && target[1..].chars().all(|c| c.is_ascii_digit()) {
         if let Some(block) = page.full_blocks.get(target) {
@@ -384,6 +416,12 @@ pub fn extract_view(page: &PageData, target: &str) -> Result<ViewData> {
     let (context_tag, nodes) = find_view_nodes_for_element(page, &element_id)
         .ok_or_else(|| anyhow::anyhow!("element {element_id} not found in current page tree"))?;
 
+    let nodes = if verbose {
+        nodes
+    } else {
+        narrow_view_to_item(nodes, &element_id)
+    };
+
     Ok(ViewData {
         target: element_id,
         url: page.url.clone(),
@@ -391,6 +429,98 @@ pub fn extract_view(page: &PageData, target: &str) -> Result<ViewData> {
         context_tag,
         nodes,
     })
+}
+
+fn narrow_view_to_item(nodes: Vec<Node>, element_id: &str) -> Vec<Node> {
+    if nodes.len() != 1 {
+        return nodes;
+    }
+    match &nodes[0] {
+        Node::List { children, .. } | Node::Table { children, .. } => {
+            for child in children {
+                match child {
+                    Node::Item { children: item_children, .. } | Node::Row { children: item_children } => {
+                        if subtree_contains_id(item_children, element_id) {
+                            return vec![child.clone()];
+                        }
+                    }
+                    _ => {
+                        if node_has_id(child, element_id) {
+                            return vec![child.clone()];
+                        }
+                    }
+                }
+            }
+            nodes
+        }
+        _ => nodes,
+    }
+}
+
+pub fn compact_nodes(nodes: Vec<Node>) -> Vec<Node> {
+    let mut result = Vec::new();
+    for node in nodes {
+        match node {
+            Node::Container { ref tag, ref role, children, .. }
+                if !is_compact_visible_container(tag, role.as_deref()) =>
+            {
+                result.extend(compact_nodes(children));
+            }
+            Node::Container { tag, role, class_name, children } => {
+                result.push(Node::Container {
+                    tag,
+                    role,
+                    class_name,
+                    children: compact_nodes(children),
+                });
+            }
+            Node::List { id, truncated, shown, total_items, current_page, total_pages, children } => {
+                result.push(Node::List {
+                    id, truncated, shown, total_items, current_page, total_pages,
+                    children: compact_nodes(children),
+                });
+            }
+            Node::Item { class_name, children } => {
+                result.push(Node::Item {
+                    class_name,
+                    children: compact_nodes(children),
+                });
+            }
+            Node::Table { id, truncated, shown, total_items, current_page, total_pages, children } => {
+                result.push(Node::Table {
+                    id, truncated, shown, total_items, current_page, total_pages,
+                    children: compact_nodes(children),
+                });
+            }
+            Node::Row { children } => {
+                result.push(Node::Row { children: compact_nodes(children) });
+            }
+            Node::Cell { children } => {
+                result.push(Node::Cell { children: compact_nodes(children) });
+            }
+            other => result.push(other),
+        }
+    }
+    result
+}
+
+fn is_compact_visible_container(tag: &str, role: Option<&str>) -> bool {
+    role.is_some()
+        || matches!(
+            tag,
+            "section"
+                | "article"
+                | "nav"
+                | "main"
+                | "header"
+                | "footer"
+                | "aside"
+                | "form"
+                | "dialog"
+                | "fieldset"
+                | "details"
+                | "summary"
+        )
 }
 
 fn find_view_nodes_for_element(
@@ -1925,9 +2055,14 @@ mod tests {
             )]),
         };
 
-        let view = extract_view(&page, "e2").unwrap();
+        let view = extract_view(&page, "e2", false).unwrap();
         assert_eq!(view.context_tag.as_deref(), Some("list"));
-        assert!(matches!(view.nodes[0], Node::List { .. }));
+        // narrow_view_to_item narrows to the Item containing e2
+        assert!(matches!(view.nodes[0], Node::Item { .. }));
+
+        let view_verbose = extract_view(&page, "e2", true).unwrap();
+        assert_eq!(view_verbose.context_tag.as_deref(), Some("list"));
+        assert!(matches!(view_verbose.nodes[0], Node::List { .. }));
     }
 
     #[test]

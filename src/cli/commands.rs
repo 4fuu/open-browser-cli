@@ -72,7 +72,7 @@ pub async fn open(url: &str, wait_after_load: u64, quiet: bool, json_mode: bool)
         }))?;
     } else {
         println!("Session {session_id} opened: {opened_url}\n");
-        println!("{}", crate::cli::output::format_page(&page, false));
+        println!("{}", crate::cli::output::format_page(&page, false, true));
     }
     Ok(())
 }
@@ -213,6 +213,7 @@ pub async fn page(
     prev: bool,
     fresh: bool,
     json_mode: bool,
+    verbose: bool,
 ) -> Result<()> {
     let action = if fresh {
         actions::GET_PAGE_FRESH
@@ -236,7 +237,7 @@ pub async fn page(
         page_num
     };
     let page_data = parse_page_from_snapshot(&snapshot, resolved_page)?;
-    println!("{}", crate::cli::output::format_page(&page_data, json_mode));
+    println!("{}", crate::cli::output::format_page(&page_data, json_mode, verbose));
     Ok(())
 }
 
@@ -341,7 +342,7 @@ pub async fn click(
         }
         println!(
             "{}",
-            crate::cli::output::format_page(updated.as_ref().expect("page fetched"), false)
+            crate::cli::output::format_page(updated.as_ref().expect("page fetched"), false, true)
         );
     }
     Ok(())
@@ -631,13 +632,13 @@ pub async fn type_text(
     } else {
         println!(
             "{}",
-            crate::cli::output::format_page(updated.as_ref().expect("page fetched"), false)
+            crate::cli::output::format_page(updated.as_ref().expect("page fetched"), false, true)
         );
     }
     Ok(())
 }
 
-pub async fn search(session_id: &str, query: &str, fresh: bool, json_mode: bool) -> Result<()> {
+pub async fn search(session_id: &str, query: &str, fresh: bool, json_mode: bool, verbose: bool) -> Result<()> {
     let snapshot = fetch_snapshot(
         session_id,
         if fresh {
@@ -650,7 +651,7 @@ pub async fn search(session_id: &str, query: &str, fresh: bool, json_mode: bool)
     let results = search_snapshot(&snapshot, query);
     println!(
         "{}",
-        crate::cli::output::format_search_results(&results, json_mode)
+        crate::cli::output::format_search_results(&results, json_mode, verbose)
     );
     Ok(())
 }
@@ -715,7 +716,7 @@ pub async fn wait(
     } else if quiet {
         println!("wait ok");
     } else if let Some(page) = wait_output.page.as_ref() {
-        println!("{}", crate::cli::output::format_page(page, false));
+        println!("{}", crate::cli::output::format_page(page, false, true));
     } else {
         println!("Page reached a stable state.");
     }
@@ -758,7 +759,7 @@ async fn wait_for_text(
             } else if quiet {
                 println!("wait ok: \"{}\" found", query);
             } else if let Some(page) = output.page.as_ref() {
-                println!("{}", crate::cli::output::format_page(page, false));
+                println!("{}", crate::cli::output::format_page(page, false, true));
             }
             return Ok(());
         }
@@ -831,6 +832,7 @@ pub async fn block(
     all: bool,
     fresh: bool,
     json_mode: bool,
+    verbose: bool,
 ) -> Result<()> {
     let block_id = normalize_block_target(block_id).unwrap_or_else(|| block_id.to_string());
     let page = resolve_page(
@@ -847,11 +849,11 @@ pub async fn block(
     if all {
         let block = resolve_block_all(&page, &block_id)
             .ok_or_else(|| block_lookup_error(session_id, source_page, &block_id))?;
-        println!("{}", crate::cli::output::format_block(&block, json_mode));
+        println!("{}", crate::cli::output::format_block(&block, json_mode, verbose));
     } else {
         let block = resolve_block(&page, &block_id, page_num)
             .ok_or_else(|| block_lookup_error(session_id, source_page, &block_id))?;
-        println!("{}", crate::cli::output::format_block(&block, json_mode));
+        println!("{}", crate::cli::output::format_block(&block, json_mode, verbose));
     }
     Ok(())
 }
@@ -862,6 +864,7 @@ pub async fn view(
     page_num: Option<u32>,
     fresh: bool,
     json_mode: bool,
+    verbose: bool,
 ) -> Result<()> {
     use crate::page::structure::extract_view;
 
@@ -876,8 +879,8 @@ pub async fn view(
     )
     .await?;
 
-    let view = extract_view(&page, target)?;
-    println!("{}", crate::cli::output::format_view(&view, json_mode));
+    let view = extract_view(&page, target, verbose)?;
+    println!("{}", crate::cli::output::format_view(&view, json_mode, verbose));
     Ok(())
 }
 

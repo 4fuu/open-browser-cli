@@ -13,6 +13,7 @@ description: "Drives a real browser session via browser-cli: open stateful sessi
 - `click` and `type` accept either a full element ID (`e3`), the numeric part (`3`), or a text query matched against the current page's interactive elements.
 - `text` and `block` accept either full IDs such as `t1` / `b1` or their numeric parts (`1`).
 - Prefer `--json` when another tool or agent will consume the result.
+- Use `--verbose` with `page`, `search`, `block`, or `view` when you need full JSON detail instead of the default compact form.
 - Use `--fresh` when the cache may be stale or the page is highly dynamic.
 - `open`, `click`, `type`, and `wait` return the current page by default; use `--quiet` when you only need a compact success result.
 - Use `click --new-session` only for link elements with `href`. It opens the destination in a new session and keeps the source session unchanged.
@@ -86,7 +87,7 @@ browser-cli close --all
 
 ### Inspect the current page
 
-Default output is XML. Use `--json` for structured machine consumption.
+Default output is XML. Use `--json` for structured machine consumption. `page`, `search`, `block`, and `view` support `--verbose` to return the full JSON payload instead of the default compact form.
 
 ```bash
 browser-cli page s123
@@ -103,6 +104,7 @@ browser-cli page s123 --fresh
 ```bash
 browser-cli search s123 "sign in"
 browser-cli search s123 "search" --fresh --json
+browser-cli search s123 "search" --fresh --json --verbose
 ```
 
 If page text is truncated, fetch the full text by `text_id`:
@@ -118,6 +120,7 @@ If a list or table is block-paginated, continue reading with `block`:
 browser-cli block s123 b1 --source-page 1 -p 2
 browser-cli block s123 1 --source-page 1 -p 2
 browser-cli block s123 b1 --all
+browser-cli block s123 b1 --all --json --verbose
 ```
 
 For a focused subtree or full expansion of one target, use `view`:
@@ -126,7 +129,10 @@ For a focused subtree or full expansion of one target, use `view`:
 browser-cli view s123 e3
 browser-cli view s123 t1
 browser-cli view s123 "pricing"
+browser-cli view s123 e3 --json --verbose
 ```
+
+By default, `view` narrows list/table matches to the single `item` or `row` containing the target element. Add `--verbose` to keep the full surrounding list/table context.
 
 ### Interact with the page
 

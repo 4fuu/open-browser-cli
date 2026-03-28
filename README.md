@@ -148,13 +148,13 @@ browser-cli close <session-id> [--json]
 browser-cli close --all [--json]
 browser-cli --version
 
-browser-cli page <session-id> [-p <页码>] [--next] [--prev] [--fresh] [--json]
+browser-cli page <session-id> [-p <页码>] [--next] [--prev] [--fresh] [--json] [--verbose]
 browser-cli click <session-id> <目标> [-p <页码>] [--new-session] [--fresh] [--quiet] [--json]
 browser-cli type <session-id> <目标> <文本> [-p <页码>] [--fresh] [--quiet] [--json]
-browser-cli search <session-id> <关键词> [--fresh] [--json]
+browser-cli search <session-id> <关键词> [--fresh] [--json] [--verbose]
 browser-cli text <session-id> <文本ID|数字> [-p <页码>] [--fresh] [--json]
-browser-cli block <session-id> <块ID|数字> [--source-page <页码>] [(-p <块页码>)|--all] [--fresh] [--json]
-browser-cli view <session-id> <目标> [-p <页码>] [--fresh] [--json]
+browser-cli block <session-id> <块ID|数字> [--source-page <页码>] [(-p <块页码>)|--all] [--fresh] [--json] [--verbose]
+browser-cli view <session-id> <目标> [-p <页码>] [--fresh] [--json] [--verbose]
 browser-cli wait <session-id> [--for <文本>] [--timeout <毫秒>] [--quiet] [--json]
 
 browser-cli plugin list [--json]
@@ -189,13 +189,15 @@ browser-cli teardown [--browser chrome|firefox]
 - `--version` 显示构建时注入的版本号；若未注入则显示 `unknown`
 - `open` 默认会在创建会话后直接输出当前页；用 `--quiet` 只看会话信息，用 `--wait 0` 可跳过打开后的稳定等待
 - `open` / `close` / `list` / `search` / `wait` / `plugin` / `view` 全部支持 `--json`
+- `page` / `search` / `block` / `view` 支持 `--verbose`：主要用于拿完整 JSON 细节；不带时，`--json` 默认返回更紧凑的数据
 - `click` / `type` 的 `<目标>` 既可以是带前缀 ID（如 `e1`）、数字 ID（如 `1` 对应 `e1`），也可以是当前页交互元素的文本查询；查询会匹配按钮文本、链接文本、输入框 placeholder/value 等
 - `click` / `type` 默认会输出更新后的整页 XML；可用 `--quiet` 只看成功结果，用 `--json` 获取结构化摘要
 - `wait` 默认等待页面稳定并返回最新页面；`--for <文本>` 会轮询最新快照，直到页面里出现匹配该文本的元素
-- `search` 会返回 `page`、`tag`、上下文摘要，以及命中交互元素时的 `element_id`
+- `search` 在 XML/纯文本模式下仍返回 `page`、`tag`、上下文摘要，以及命中交互元素时的 `element_id`；在 `--json` 下默认返回紧凑结果，`--verbose` 才返回完整匹配结构
 - 长文本截断会明确显示为 `[...truncated]`
 - 超长 `list` / `table` 会在页面中先显示首段，并带上块级分页属性；分页按渲染后的 XML 行数预算切分，而不是按条目数量硬切；可用 `browser-cli block <session-id> <块ID或数字> --source-page <页码> -p <块页码>` 读取单页，或用 `--all` 一次展开整个块
 - `view` 会返回某个元素、长文本或长块的聚焦视图；目标支持 `e3` / `3` / `t1` / `b1` / 文本查询
+- `view` 命中列表或表格中的元素时，默认只返回包含该目标的单条 `item` / `row`；加 `--verbose` 才返回完整列表/表格上下文
 - `click --new-session` 仅对带 `href` 的链接生效；CLI 会把链接解析成绝对 URL，并直接创建一个新的 session，原页面保持不变
 
 ### 插件

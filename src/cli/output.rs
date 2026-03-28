@@ -1,26 +1,76 @@
-use crate::page::structure::{BlockData, PageData, SearchResults};
+use crate::page::structure::{BlockData, PageData, SearchResults, compact_nodes};
 use crate::protocol::messages::Response;
 
-pub fn format_page(page: &PageData, json: bool) -> String {
+pub fn format_page(page: &PageData, json: bool, verbose: bool) -> String {
     if json {
-        serde_json::to_string_pretty(page).unwrap()
+        if verbose {
+            serde_json::to_string_pretty(page).unwrap()
+        } else {
+            let compact = PageData {
+                url: page.url.clone(),
+                title: page.title.clone(),
+                current_page: page.current_page,
+                total_pages: page.total_pages,
+                truncated: page.truncated,
+                shown: page.shown,
+                total: page.total,
+                nodes: compact_nodes(page.nodes.clone()),
+                element_refs: Default::default(),
+                full_texts: Default::default(),
+                full_blocks: Default::default(),
+            };
+            serde_json::to_string_pretty(&compact).unwrap()
+        }
     } else {
+        let _ = verbose;
         crate::page::xml::render_xml(page)
     }
 }
 
-pub fn format_block(block: &BlockData, json: bool) -> String {
+pub fn format_block(block: &BlockData, json: bool, verbose: bool) -> String {
     if json {
-        serde_json::to_string_pretty(block).unwrap()
+        if verbose {
+            serde_json::to_string_pretty(block).unwrap()
+        } else {
+            let compact = match block {
+                BlockData::List { id, truncated, shown, total_items, current_page, total_pages, children } => {
+                    BlockData::List {
+                        id: id.clone(), truncated: *truncated, shown: *shown,
+                        total_items: *total_items, current_page: *current_page, total_pages: *total_pages,
+                        children: compact_nodes(children.clone()),
+                    }
+                }
+                BlockData::Table { id, truncated, shown, total_items, current_page, total_pages, children } => {
+                    BlockData::Table {
+                        id: id.clone(), truncated: *truncated, shown: *shown,
+                        total_items: *total_items, current_page: *current_page, total_pages: *total_pages,
+                        children: compact_nodes(children.clone()),
+                    }
+                }
+            };
+            serde_json::to_string_pretty(&compact).unwrap()
+        }
     } else {
         crate::page::xml::render_block_xml(block)
     }
 }
 
-pub fn format_view(view: &crate::page::structure::ViewData, json: bool) -> String {
+pub fn format_view(view: &crate::page::structure::ViewData, json: bool, verbose: bool) -> String {
     if json {
-        serde_json::to_string_pretty(view).unwrap()
+        if verbose {
+            serde_json::to_string_pretty(view).unwrap()
+        } else {
+            let compact = crate::page::structure::ViewData {
+                target: view.target.clone(),
+                url: view.url.clone(),
+                title: view.title.clone(),
+                context_tag: view.context_tag.clone(),
+                nodes: compact_nodes(view.nodes.clone()),
+            };
+            serde_json::to_string_pretty(&compact).unwrap()
+        }
     } else {
+        let _ = verbose;
         crate::page::xml::render_view_xml(view)
     }
 }
@@ -57,9 +107,13 @@ pub fn format_response(response: &Response, json_mode: bool) -> String {
     }
 }
 
-pub fn format_search_results(results: &SearchResults, json: bool) -> String {
+pub fn format_search_results(results: &SearchResults, json: bool, verbose: bool) -> String {
     if json {
-        return serde_json::to_string_pretty(results).unwrap();
+        if verbose {
+            return serde_json::to_string_pretty(results).unwrap();
+        } else {
+            return serde_json::to_string_pretty(&results.to_compact()).unwrap();
+        }
     }
 
     if results.matches.is_empty() {
@@ -179,7 +233,7 @@ mod tests {
 
     #[test]
     fn format_page_json_contains_elements() {
-        let output = format_page(&sample_page(), true);
+        let output = format_page(&sample_page(), true, false);
         let parsed: serde_json::Value = serde_json::from_str(&output).unwrap();
         assert_eq!(parsed["title"], "Example");
         assert!(parsed["nodes"].is_array());
@@ -209,7 +263,7 @@ mod tests {
                 context: "Rust browser automation".into(),
             }],
         };
-        let output = format_search_results(&results, false);
+        let output = format_search_results(&results, false, false);
         assert!(output.contains("[div]"));
         assert!(output.contains("[page 1]"));
         assert!(output.contains("e2"));

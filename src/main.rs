@@ -127,6 +127,9 @@ enum Command {
         /// Output as JSON instead of XML
         #[arg(long)]
         json: bool,
+        /// Show full details (more info in JSON mode)
+        #[arg(long, short = 'v')]
+        verbose: bool,
     },
     /// Click an element by ID
     Click {
@@ -189,6 +192,9 @@ enum Command {
         /// Output as JSON
         #[arg(long)]
         json: bool,
+        /// Show full details (more info in JSON mode)
+        #[arg(long, short = 'v')]
+        verbose: bool,
     },
     /// Wait for page stability or for a specific element to appear
     Wait {
@@ -247,6 +253,9 @@ enum Command {
         /// Output as JSON
         #[arg(long)]
         json: bool,
+        /// Show full details (more info in JSON mode)
+        #[arg(long, short = 'v')]
+        verbose: bool,
     },
     /// Show a focused view of a specific element, text, or block and its surrounding context
     View {
@@ -263,6 +272,9 @@ enum Command {
         /// Output as JSON
         #[arg(long)]
         json: bool,
+        /// Show full details (more info in JSON mode)
+        #[arg(long, short = 'v')]
+        verbose: bool,
     },
     /// Manage and run plugins
     Plugin {
@@ -363,7 +375,8 @@ async fn main() -> anyhow::Result<()> {
             prev,
             fresh,
             json,
-        } => cli::commands::page(session_id, page, next, prev, fresh, json).await?,
+            verbose,
+        } => cli::commands::page(session_id, page, next, prev, fresh, json, verbose).await?,
         Command::Click {
             ref session_id,
             ref target,
@@ -415,7 +428,8 @@ async fn main() -> anyhow::Result<()> {
             ref query,
             fresh,
             json,
-        } => cli::commands::search(session_id, query, fresh, json).await?,
+            verbose,
+        } => cli::commands::search(session_id, query, fresh, json, verbose).await?,
         Command::Wait {
             ref session_id,
             ref for_text,
@@ -439,8 +453,9 @@ async fn main() -> anyhow::Result<()> {
             all,
             fresh,
             json,
+            verbose,
         } => {
-            cli::commands::block(session_id, block_id, source_page, page, all, fresh, json).await?
+            cli::commands::block(session_id, block_id, source_page, page, all, fresh, json, verbose).await?
         }
         Command::View {
             ref session_id,
@@ -448,7 +463,8 @@ async fn main() -> anyhow::Result<()> {
             page,
             fresh,
             json,
-        } => cli::commands::view(session_id, target, page, fresh, json).await?,
+            verbose,
+        } => cli::commands::view(session_id, target, page, fresh, json, verbose).await?,
         Command::Plugin { ref cmd } => match cmd {
             PluginCommand::Run {
                 name,
