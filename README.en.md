@@ -11,6 +11,7 @@ A browser session tool for the command line and AI agents. Uses a Chrome/Firefox
 
 **Features:**
 - **Stateful sessions** — login state, cookies, form data, and navigation history are preserved
+- **Tiny binary** — the CLI binary is about 2 MB, uses very little memory, and is easy to install and use
 - **Structured XML output** — low token cost and easy for AI/agents to consume
 - **Short element IDs** — interact without CSS selectors
 - **High-fidelity interaction** — simulated mouse movement and keyboard typing to avoid bot detection
