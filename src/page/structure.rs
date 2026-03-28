@@ -1310,6 +1310,9 @@ fn classify_interactive<'a>(
         _ if onclick || has_press_state || (focusable && has_selection_state) => {
             Some(InteractiveKind::Button { text })
         }
+        _ if attrs.get("cursor").map(String::as_str) == Some("pointer") && !text.is_empty() => {
+            Some(InteractiveKind::Button { text })
+        }
         _ => None,
     }
 }
@@ -1958,6 +1961,32 @@ mod tests {
             }
             other => panic!("unexpected: {other:?}"),
         }
+    }
+
+    #[test]
+    fn cursor_pointer_becomes_button() {
+        let body = node("r1", None, "body", "", 0.0);
+        let mut item = node("r2", Some("r1"), "li", "番剧", 10.0);
+        item.attrs.insert("cursor".into(), "pointer".into());
+
+        let page = parse_page_from_snapshot(&snapshot(vec![body, item]), Some(1)).unwrap();
+        match &page.nodes[0] {
+            Node::Button { id, text } => {
+                assert_eq!(id, "e1");
+                assert_eq!(text, "番剧");
+            }
+            other => panic!("expected Button, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn cursor_pointer_without_text_stays_non_interactive() {
+        let body = node("r1", None, "body", "", 0.0);
+        let mut item = node("r2", Some("r1"), "div", "", 10.0);
+        item.attrs.insert("cursor".into(), "pointer".into());
+
+        let page = parse_page_from_snapshot(&snapshot(vec![body, item]), Some(1)).unwrap();
+        assert!(page.nodes.is_empty() || !matches!(&page.nodes[0], Node::Button { .. }));
     }
 
     #[test]

@@ -999,6 +999,13 @@ function extractAttrs(element: Element): Record<string, string> {
   if (element.hasAttribute('onclick') || typeof maybeOnclick === 'function') {
     attrs.onclick = 'true';
   }
+  if (
+    !element.matches(INTERACTIVE_SELECTOR) &&
+    element instanceof HTMLElement &&
+    getComputedStyle(element).cursor === 'pointer'
+  ) {
+    attrs.cursor = 'pointer';
+  }
   if (element.hasAttribute('disabled')) {
     attrs.disabled = 'true';
   }
