@@ -1027,6 +1027,24 @@ function extractAttrs(element: Element): Record<string, string> {
     attrs.selected = 'true';
   }
 
+  // Media playback state
+  if (element instanceof HTMLMediaElement) {
+    attrs['media-state'] = element.paused ? 'paused' : 'playing';
+    if (element.ended) {
+      attrs['media-state'] = 'ended';
+    }
+    attrs['media-current-time'] = String(Math.round(element.currentTime));
+    if (Number.isFinite(element.duration)) {
+      attrs['media-duration'] = String(Math.round(element.duration));
+    }
+    if (element.muted) {
+      attrs['media-muted'] = 'true';
+    }
+    if (element instanceof HTMLVideoElement && element.videoWidth > 0) {
+      attrs['media-resolution'] = `${element.videoWidth}x${element.videoHeight}`;
+    }
+  }
+
   if (
     element instanceof HTMLInputElement ||
     element instanceof HTMLTextAreaElement ||

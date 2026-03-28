@@ -112,6 +112,15 @@ pub enum Node {
     Cell {
         children: Vec<Node>,
     },
+    Media {
+        id: String,
+        tag: String,
+        media_state: String,
+        current_time: u64,
+        duration: Option<u64>,
+        muted: bool,
+        resolution: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -780,7 +789,8 @@ fn node_has_id(node: &Node, id: &str) -> bool {
         | Node::Checkbox { id: nid, .. }
         | Node::Radio { id: nid, .. }
         | Node::Select { id: nid, .. }
-        | Node::Textarea { id: nid, .. } => nid == id,
+        | Node::Textarea { id: nid, .. }
+        | Node::Media { id: nid, .. } => nid == id,
         Node::Text { id: Some(nid), .. } => nid == id,
         Node::List { id: Some(nid), .. } | Node::Table { id: Some(nid), .. } => nid == id,
         _ => false,
@@ -920,6 +930,45 @@ fn build_node<'a>(
         "table" => {
             let table = build_table_node(raw, children_by_parent, node_by_ref, filter, state)?;
             return Some(table);
+        }
+        "audio" | "video" if raw.attrs.contains_key("media-state") => {
+            if !visible_here {
+                return None;
+            }
+            let id = format!("e{}", state.next_element_id);
+            state.next_element_id += 1;
+            state
+                .element_refs
+                .insert(id.clone(), raw.ref_id.clone());
+            let media_state = raw
+                .attrs
+                .get("media-state")
+                .cloned()
+                .unwrap_or_else(|| "paused".to_string());
+            let current_time = raw
+                .attrs
+                .get("media-current-time")
+                .and_then(|v| v.parse::<u64>().ok())
+                .unwrap_or(0);
+            let duration = raw
+                .attrs
+                .get("media-duration")
+                .and_then(|v| v.parse::<u64>().ok());
+            let muted = raw
+                .attrs
+                .get("media-muted")
+                .map(|v| v == "true")
+                .unwrap_or(false);
+            let resolution = raw.attrs.get("media-resolution").cloned();
+            return Some(Node::Media {
+                id,
+                tag: raw.tag.clone(),
+                media_state,
+                current_time,
+                duration,
+                muted,
+                resolution,
+            });
         }
         _ => {}
     }
@@ -1725,7 +1774,8 @@ fn estimate_node_lines(node: &Node) -> usize {
         | Node::Checkbox { .. }
         | Node::Radio { .. }
         | Node::Select { .. }
-        | Node::Textarea { .. } => 1,
+        | Node::Textarea { .. }
+        | Node::Media { .. } => 1,
         Node::Container { children, .. }
         | Node::List { children, .. }
         | Node::Item { children, .. }

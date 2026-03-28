@@ -414,6 +414,33 @@ fn render_node(
         }
         Node::Row { children } => render_row(out, children, indent),
         Node::Cell { children } => render_cell(out, children, indent),
+        Node::Media {
+            id,
+            tag,
+            media_state,
+            current_time,
+            duration,
+            muted,
+            resolution,
+        } => {
+            out.push_str(&format!(
+                "{indent_str}<media id=\"{}\" tag=\"{}\" state=\"{}\" time=\"{}\"",
+                escape_xml(id),
+                escape_xml(tag),
+                escape_xml(media_state),
+                current_time,
+            ));
+            if let Some(dur) = duration {
+                out.push_str(&format!(" duration=\"{}\"", dur));
+            }
+            if *muted {
+                out.push_str(" muted=\"true\"");
+            }
+            if let Some(res) = resolution {
+                out.push_str(&format!(" resolution=\"{}\"", escape_xml(res)));
+            }
+            out.push_str("/>\n");
+        }
     }
 }
 
@@ -611,6 +638,7 @@ fn node_type_tag(node: &Node) -> &str {
         Node::Table { .. } => "table",
         Node::Row { .. } => "row",
         Node::Cell { .. } => "cell",
+        Node::Media { .. } => "media",
     }
 }
 
@@ -691,6 +719,7 @@ fn item_can_inline_single_child(node: &Node) -> bool {
             | Node::Radio { .. }
             | Node::Select { .. }
             | Node::Textarea { .. }
+            | Node::Media { .. }
     )
 }
 

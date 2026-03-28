@@ -411,9 +411,8 @@ fn collect_interactive_targets(node: &Node, out: &mut Vec<(String, String)>) {
                 collect_interactive_targets(child, out);
             }
         }
-        Node::Text { .. } | Node::Heading { .. } => {}
+        Node::Text { .. } | Node::Heading { .. } | Node::Media { .. } => {}
     }
-}
 
 fn node_text(node: &Node) -> String {
     match node {
@@ -446,6 +445,7 @@ fn node_text(node: &Node) -> String {
             .filter(|value| !value.is_empty())
             .collect::<Vec<_>>()
             .join(" "),
+        Node::Media { tag, media_state, .. } => format!("{} ({})", tag, media_state),
     }
 }
 
