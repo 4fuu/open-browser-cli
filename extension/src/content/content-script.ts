@@ -104,17 +104,25 @@ class CursorAgent {
         return;
       }
       if (this.activeTarget) {
+        // Target may have been unmounted by SPA rerender
+        if (!this.activeTarget.isConnected) {
+          this.activeTarget = null;
+          return;
+        }
         const rect = this.activeTarget.getBoundingClientRect();
-        const centerX = rect.left + rect.width / 2;
-        const centerY = rect.top + rect.height / 2;
-        // If the target is still within the viewport, track it
-        if (
-          centerX >= 0 && centerX <= window.innerWidth &&
-          centerY >= 0 && centerY <= window.innerHeight
-        ) {
-          this.moveInstant(centerX, centerY);
+        // Check if rect intersects viewport at all
+        const inViewport =
+          rect.bottom > 0 &&
+          rect.top < window.innerHeight &&
+          rect.right > 0 &&
+          rect.left < window.innerWidth;
+
+        if (inViewport) {
+          // Clamp to viewport for cursor position
+          const x = Math.max(0, Math.min(rect.left + rect.width / 2, window.innerWidth));
+          const y = Math.max(0, Math.min(rect.top + rect.height / 2, window.innerHeight));
+          this.moveInstant(x, y);
         } else {
-          // Target scrolled out of view — hide the cursor overlay
           this.moveInstant(-100, -100);
         }
       }
