@@ -1,28 +1,28 @@
 class BrowserCli < Formula
   desc "Browser session CLI with Native Messaging relay"
   homepage "https://github.com/4fuu/open-browser-cli"
-  version "0.4.3"
+  version "0.5.0"
   license "MIT"
 
   on_macos do
     on_arm do
-      url "https://github.com/4fuu/open-browser-cli/releases/download/0.4.3/browser-cli-aarch64-apple-darwin.tar.gz"
-      sha256 "ab19b274af11208f4d7a91893f71158e0abe1419a1d9a69176598be74381883c" # macos_arm64
+      url "https://github.com/4fuu/open-browser-cli/releases/download/0.5.0/browser-cli-aarch64-apple-darwin.tar.gz"
+      sha256 "b881649c2ca3c68f1bb670955be8bfc9b0a3bf2abf8cd0f6a1f65431bfb5337b" # macos_arm64
     end
     on_intel do
-      url "https://github.com/4fuu/open-browser-cli/releases/download/0.4.3/browser-cli-x86_64-apple-darwin.tar.gz"
-      sha256 "8a332b794103b14c3ac3a89cc0054ceaba17668ae916664800a72d6078fccd7c" # macos_x86
+      url "https://github.com/4fuu/open-browser-cli/releases/download/0.5.0/browser-cli-x86_64-apple-darwin.tar.gz"
+      sha256 "ebdcc10e0c6fc2c90ea544dad482162060f5f9085c31688f7d1554653e4dea99" # macos_x86
     end
   end
 
   on_linux do
     on_arm do
-      url "https://github.com/4fuu/open-browser-cli/releases/download/0.4.3/browser-cli-aarch64-unknown-linux-gnu.tar.gz"
-      sha256 "45d96cfe38fb6ccfce9f86e153bd78825ef7e19f6f253c699de0f9544483d4df" # linux_arm64
+      url "https://github.com/4fuu/open-browser-cli/releases/download/0.5.0/browser-cli-aarch64-unknown-linux-gnu.tar.gz"
+      sha256 "8bcd513c68d02b750040064c8372891af71a98d4c46d1f045c3e7fdd86cf42be" # linux_arm64
     end
     on_intel do
-      url "https://github.com/4fuu/open-browser-cli/releases/download/0.4.3/browser-cli-x86_64-unknown-linux-gnu.tar.gz"
-      sha256 "d9c2b27de427646364322c98f8480f242c1170d2d5617e7a9509834f8ea0444f" # linux_x86
+      url "https://github.com/4fuu/open-browser-cli/releases/download/0.5.0/browser-cli-x86_64-unknown-linux-gnu.tar.gz"
+      sha256 "0a11710a3b19a22787de246ed4ef186628bf3f2cd594b651682715f48d391ae4" # linux_x86
     end
   end
 
