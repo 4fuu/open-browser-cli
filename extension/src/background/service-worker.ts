@@ -307,7 +307,7 @@ async function handleScreenshot(req: Request): Promise<Response> {
 
   const quality = typeof req.params.quality === 'number' ? req.params.quality : undefined;
   const format: 'png' | 'jpeg' = quality !== undefined ? 'jpeg' : 'png';
-  const options: chrome.tabs.CaptureVisibleTabOptions = { format };
+  const options: Parameters<typeof chrome.tabs.captureVisibleTab>[1] = { format };
   if (quality !== undefined) {
     options.quality = quality;
   }
