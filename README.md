@@ -1,16 +1,36 @@
 # browser-cli
 
-面向命令行和 AI 的浏览器会话操作工具。通过 Chrome/Firefox 扩展 + Native Messaging 协议，将浏览器页面结构化为 XML/JSON 输出，并支持点击、输入等交互操作。
+> 用你的真实浏览器——会话、登录态、Cookie 全部保留
 
-English version: [README.en.md](README.en.md)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Rust](https://img.shields.io/badge/rust-stable-orange.svg)](https://www.rust-lang.org)
+[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey.svg)]()
+[![English](https://img.shields.io/badge/lang-English-informational)](README.en.md)
 
-**核心优势：**
-- 有状态会话——登录态、Cookie、跳转历史全部保留
-- 结构化 XML 输出——token 消耗低，AI/Agent 直接可读
-- 短 ID 操作——无需 CSS 选择器，稳定可靠
-- 高仿真交互——模拟真实鼠标轨迹和键盘输入，绕过反爬检测
-- 声明式插件——TOML 规则文件，复用自动化操作
-- 本地通信——全链路在本机，完全隔离
+面向命令行和 AI 的浏览器会话操作工具。通过 Chrome/Firefox 扩展 + Native Messaging，将你的真实浏览器页面结构化为 XML/JSON 输出，并支持点击、输入等交互操作。
+
+**核心特性：**
+- **有状态会话** — 登录态、Cookie、跳转历史全部保留
+- **结构化 XML 输出** — token 消耗低，AI/Agent 直接可读
+- **短 ID 操作** — 无需 CSS 选择器，稳定可靠
+- **高仿真交互** — 模拟真实鼠标轨迹和键盘输入，绕过反爬检测
+- **声明式插件** — TOML 规则文件，复用自动化操作
+- **本地通信** — 全链路在本机，完全隔离
+
+---
+
+## 对比
+
+| | browser-cli | [opencli](https://github.com/jackwener/opencli) | Playwright / Selenium | curl / requests |
+|---|---|---|---|---|
+| 浏览器实例 | 真实浏览器（Chrome/Firefox） | 真实浏览器（Chrome） | 新建独立实例 | 无浏览器 |
+| 会话保留 | ✅ 登录态 / Cookie | ✅ 复用 Chrome 会话 | ❌ 每次重置 | ❌ |
+| 支持范围 | 任意页面 | 50+ 预置站点 | 任意页面 | 任意 URL |
+| 交互方式 | 通用（click / type） | 站点专属命令 | 编程 API | HTTP 请求 |
+| 反爬检测 | 真实指纹 | 防检测增强 | 易被识别 | 易被识别 |
+| 页面输出 | 精简 XML/JSON | 确定性结果 JSON | HTML / DOM | HTML |
+| AI/Agent 消费 | 低 token，结构化 | 低 token，结构化 JSON | 高 token，原始 | 高 token |
+| 本地隔离 | ✅ 全本机 | ✅ | 部分 | ✅ |
 
 ---
 
@@ -20,6 +40,7 @@ English version: [README.en.md](README.en.md)
 2. [使用](#使用)
 3. [开发](#开发)
 4. [为什么选择 browser-cli](#为什么选择-browser-cli)
+5. [贡献](#贡献)
 
 ---
 
@@ -322,3 +343,9 @@ Content Script（注入目标页面）
 ```
 
 Content Script 只做轻量 DOM 采集（每 100 个节点分段推送，8ms 间隔，不阻塞页面渲染），Relay 负责缓存与快照组装，繁重的结构化计算（节点分类、文本规范化、分页过滤）全部在 CLI 侧完成。
+
+---
+
+## 贡献
+
+欢迎提交 Issue 和 Pull Request。贡献前请阅读 [CONTRIBUTING.md](CONTRIBUTING.md)。

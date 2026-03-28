@@ -1,16 +1,36 @@
 # browser-cli
 
-A browser session tool for the command line and AI agents. It uses a Chrome/Firefox extension plus Native Messaging to turn live pages into structured XML/JSON, while supporting interactions such as click and type.
+> Control your real browser from CLI — sessions, login state, and cookies all preserved
 
-For the Chinese version, see [README.md](README.md).
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Rust](https://img.shields.io/badge/rust-stable-orange.svg)](https://www.rust-lang.org)
+[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey.svg)]()
+[![中文](https://img.shields.io/badge/lang-%E4%B8%AD%E6%96%87-informational)](README.md)
 
-**Highlights:**
-- Stateful sessions: login state, cookies, form data, and navigation history are preserved
-- Structured XML output: low token cost and easy for AI/agents to consume
-- Short element IDs: interact without CSS selectors
-- High-fidelity interaction: simulated mouse movement and keyboard typing
-- Declarative plugins: reusable TOML automation rules
-- Local-only transport: the whole pipeline stays on your machine
+A browser session tool for the command line and AI agents. Uses a Chrome/Firefox extension plus Native Messaging to turn your real browser's live pages into structured XML/JSON, with support for click, type, and other interactions.
+
+**Features:**
+- **Stateful sessions** — login state, cookies, form data, and navigation history are preserved
+- **Structured XML output** — low token cost and easy for AI/agents to consume
+- **Short element IDs** — interact without CSS selectors
+- **High-fidelity interaction** — simulated mouse movement and keyboard typing to avoid bot detection
+- **Declarative plugins** — reusable TOML automation rules
+- **Local-only transport** — the whole pipeline stays on your machine
+
+---
+
+## Comparison
+
+| | browser-cli | [opencli](https://github.com/jackwener/opencli) | Playwright / Selenium | curl / requests |
+|---|---|---|---|---|
+| Browser | Your real browser (Chrome/Firefox) | Your real Chrome | New isolated instance | No browser |
+| Session | ✅ Login / cookies | ✅ Existing Chrome session | ❌ Resets each time | ❌ |
+| Coverage | Any page | 50+ preset sites | Any page | Any URL |
+| Interaction | General (click / type) | Site-specific commands | Programmatic API | HTTP requests |
+| Bot detection | Real fingerprint | Anti-detection built-in | Easily flagged | Easily flagged |
+| Page output | Compact XML / JSON | Deterministic JSON | HTML / DOM | HTML |
+| AI consumption | Low token, structured | Low token, structured JSON | High token, raw | High token |
+| Local / private | ✅ Fully local | ✅ | Partial | ✅ |
 
 ---
 
@@ -20,6 +40,7 @@ For the Chinese version, see [README.md](README.md).
 2. [Usage](#usage)
 3. [Development](#development)
 4. [Why browser-cli](#why-browser-cli)
+5. [Contributing](#contributing)
 
 ---
 
@@ -128,21 +149,23 @@ browser-cli close s1234567890
 ### Command quick reference
 
 ```text
-browser-cli open <url>
-browser-cli list
-browser-cli close <session-id>
-browser-cli close --all
+browser-cli open <url> [--wait <ms>] [--quiet] [--json]
+browser-cli list [--json]
+browser-cli close <session-id> [--json]
+browser-cli close --all [--json]
+browser-cli --version
 
 browser-cli page <session-id> [-p <page>] [--next] [--prev] [--fresh] [--json]
-browser-cli click <session-id> <element-id|number|query> [-p <page>] [--new-session]
-browser-cli type <session-id> <element-id|number|query> <text> [-p <page>]
-browser-cli search <session-id> <query>
-browser-cli text <session-id> <text-id|number> [-p <page>]
+browser-cli click <session-id> <element-id|number|query> [-p <page>] [--new-session] [--fresh] [--quiet] [--json]
+browser-cli type <session-id> <element-id|number|query> <text> [-p <page>] [--fresh] [--quiet] [--json]
+browser-cli search <session-id> <query> [--fresh] [--json]
+browser-cli text <session-id> <text-id|number> [-p <page>] [--fresh] [--json]
 browser-cli block <session-id> <block-id|number> [--source-page <page>] [(-p <block-page>)|--all] [--fresh] [--json]
-browser-cli wait <session-id> [--selector <css-selector>] [--timeout <ms>]
+browser-cli view <session-id> <element-id|number|query> [-p <page>] [--fresh] [--json]
+browser-cli wait <session-id> [--for <text>] [--timeout <ms>] [--quiet] [--json]
 
-browser-cli plugin list
-browser-cli plugin run <name> <session-id>
+browser-cli plugin list [--json]
+browser-cli plugin run <name> <session-id> [--json]
 
 browser-cli setup [--browser chrome|firefox] [--extension-id <id>]
 browser-cli teardown [--browser chrome|firefox]
@@ -243,3 +266,9 @@ For link elements, `click --new-session` opens the target URL in a brand new bro
 ### Local-only architecture
 
 The full path is local: CLI -> Relay -> Native Messaging -> extension -> content script. No remote browser service is involved.
+
+---
+
+## Contributing
+
+Issues and pull requests are welcome. Please read [CONTRIBUTING.md](CONTRIBUTING.md) before submitting.
