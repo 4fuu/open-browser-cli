@@ -900,6 +900,54 @@ fn sanitize_filename(raw: &str) -> String {
     }
 }
 
+/// Check whether a target string looks like a URL (contains `://`).
+fn is_url_target(target: &str) -> bool {
+    target.contains("://")
+}
+
+/// Resolve a download target that looks like an element ID (`e3`, `3`) into an
+/// absolute URL by looking up the element in the cached page snapshot.
+///
+/// Returns `(element_key, resolved_url)` on success.
+fn resolve_element_to_url(
+    target: &str,
+    snapshot: &crate::protocol::messages::RawSnapshot,
+    page: &PageData,
+) -> Result<(String, String)> {
+    let element_key = normalize_element_target(target).ok_or_else(|| {
+        anyhow::anyhow!("'{target}' is not a valid element ID or URL")
+    })?;
+
+    let ref_id = page.element_refs.get(&element_key).ok_or_else(|| {
+        anyhow::anyhow!(
+            "element {element_key} not found on the current page. \
+             Run `browser-cli page <session>` to see available elements."
+        )
+    })?;
+
+    // Find the raw node matching the ref_id and extract href or src
+    let raw_node = snapshot
+        .nodes
+        .iter()
+        .find(|n| n.ref_id == *ref_id)
+        .ok_or_else(|| {
+            anyhow::anyhow!("internal error: ref {ref_id} for {element_key} not in snapshot")
+        })?;
+
+    let url_attr = raw_node
+        .attrs
+        .get("href")
+        .or_else(|| raw_node.attrs.get("src"))
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "element {element_key} has no downloadable URL (no href or src attribute)"
+            )
+        })?;
+
+    let resolved = resolve_link_url(&page.url, url_attr)?;
+    Ok((element_key, resolved))
+}
+
 pub async fn download(
     session_id: &str,
     target: &str,
@@ -908,11 +956,22 @@ pub async fn download(
 ) -> Result<()> {
     use base64::Engine;
 
+    // Resolve the target: if it looks like an element ID, look up its URL from
+    // the snapshot; if it's already a URL, pass it through directly.
+    let download_url = if is_url_target(target) {
+        target.to_string()
+    } else {
+        let snapshot = fetch_snapshot(session_id, actions::GET_PAGE).await?;
+        let page = parse_page_from_snapshot(&snapshot, None)?;
+        let (_element_key, url) = resolve_element_to_url(target, &snapshot, &page)?;
+        url
+    };
+
     let data = send_ok(Request::new(
         actions::DOWNLOAD,
         json!({
             "session_id": session_id,
-            "target": target,
+            "target": download_url,
         }),
     ))
     .await?;
@@ -1467,5 +1526,134 @@ mod tests {
             error: Some("wait timed out after 30000ms".into()),
         };
         assert!(is_wait_timeout_error(&response));
+    }
+
+    #[test]
+    fn sanitize_filename_strips_path_components() {
+        assert_eq!(sanitize_filename("/tmp/secret/file.pdf"), "file.pdf");
+        assert_eq!(sanitize_filename("report.csv"), "report.csv");
+        assert_eq!(sanitize_filename(""), "download");
+        assert_eq!(sanitize_filename("."), "download");
+        assert_eq!(sanitize_filename(".."), "download");
+        assert_eq!(sanitize_filename("dir/sub\\file.txt"), "sub_file.txt");
+    }
+
+    #[test]
+    fn is_url_target_detects_urls() {
+        assert!(is_url_target("https://example.com/file.zip"));
+        assert!(is_url_target("http://example.com/file.zip"));
+        assert!(!is_url_target("e3"));
+        assert!(!is_url_target("42"));
+    }
+
+    #[test]
+    fn resolve_element_to_url_finds_href() {
+        use crate::protocol::messages::{RawNode, RawSnapshot, Rect, ScrollState, Viewport};
+        let snapshot = RawSnapshot {
+            url: "https://example.com".into(),
+            title: "Test".into(),
+            viewport: Viewport { width: 1200.0, height: 800.0 },
+            scroll: ScrollState { top: 0.0, height: 800.0 },
+            nodes: vec![RawNode {
+                ref_id: "r5".into(),
+                parent: None,
+                tag: "a".into(),
+                text: "Download".into(),
+                attrs: std::collections::HashMap::from([
+                    ("href".into(), "/files/report.pdf".into()),
+                ]),
+                rect: Rect { x: 0.0, y: 0.0, w: 100.0, h: 20.0 },
+            }],
+        };
+        let page = PageData {
+            url: "https://example.com".into(),
+            title: "Test".into(),
+            current_page: 1,
+            total_pages: 1,
+            truncated: false,
+            shown: 1,
+            total: 1,
+            nodes: vec![],
+            element_refs: std::collections::HashMap::from([("e3".into(), "r5".into())]),
+            full_texts: Default::default(),
+            full_blocks: Default::default(),
+        };
+
+        let (eid, url) = resolve_element_to_url("e3", &snapshot, &page).unwrap();
+        assert_eq!(eid, "e3");
+        assert_eq!(url, "https://example.com/files/report.pdf");
+    }
+
+    #[test]
+    fn resolve_element_to_url_finds_src() {
+        use crate::protocol::messages::{RawNode, RawSnapshot, Rect, ScrollState, Viewport};
+        let snapshot = RawSnapshot {
+            url: "https://example.com".into(),
+            title: "Test".into(),
+            viewport: Viewport { width: 1200.0, height: 800.0 },
+            scroll: ScrollState { top: 0.0, height: 800.0 },
+            nodes: vec![RawNode {
+                ref_id: "r10".into(),
+                parent: None,
+                tag: "img".into(),
+                text: "".into(),
+                attrs: std::collections::HashMap::from([
+                    ("src".into(), "https://cdn.example.com/image.png".into()),
+                ]),
+                rect: Rect { x: 0.0, y: 0.0, w: 100.0, h: 100.0 },
+            }],
+        };
+        let page = PageData {
+            url: "https://example.com".into(),
+            title: "Test".into(),
+            current_page: 1,
+            total_pages: 1,
+            truncated: false,
+            shown: 1,
+            total: 1,
+            nodes: vec![],
+            element_refs: std::collections::HashMap::from([("e7".into(), "r10".into())]),
+            full_texts: Default::default(),
+            full_blocks: Default::default(),
+        };
+
+        let (eid, url) = resolve_element_to_url("7", &snapshot, &page).unwrap();
+        assert_eq!(eid, "e7");
+        assert_eq!(url, "https://cdn.example.com/image.png");
+    }
+
+    #[test]
+    fn resolve_element_to_url_errors_on_missing_url_attr() {
+        use crate::protocol::messages::{RawNode, RawSnapshot, Rect, ScrollState, Viewport};
+        let snapshot = RawSnapshot {
+            url: "https://example.com".into(),
+            title: "Test".into(),
+            viewport: Viewport { width: 1200.0, height: 800.0 },
+            scroll: ScrollState { top: 0.0, height: 800.0 },
+            nodes: vec![RawNode {
+                ref_id: "r1".into(),
+                parent: None,
+                tag: "button".into(),
+                text: "Submit".into(),
+                attrs: std::collections::HashMap::new(),
+                rect: Rect { x: 0.0, y: 0.0, w: 80.0, h: 30.0 },
+            }],
+        };
+        let page = PageData {
+            url: "https://example.com".into(),
+            title: "Test".into(),
+            current_page: 1,
+            total_pages: 1,
+            truncated: false,
+            shown: 1,
+            total: 1,
+            nodes: vec![],
+            element_refs: std::collections::HashMap::from([("e1".into(), "r1".into())]),
+            full_texts: Default::default(),
+            full_blocks: Default::default(),
+        };
+
+        let err = resolve_element_to_url("e1", &snapshot, &page).unwrap_err();
+        assert!(err.to_string().contains("no downloadable URL"));
     }
 }
