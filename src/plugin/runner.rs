@@ -413,6 +413,7 @@ fn collect_interactive_targets(node: &Node, out: &mut Vec<(String, String)>) {
         }
         Node::Text { .. } | Node::Heading { .. } | Node::Media { .. } => {}
     }
+}
 
 fn node_text(node: &Node) -> String {
     match node {
