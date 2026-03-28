@@ -884,6 +884,69 @@ pub async fn view(
     Ok(())
 }
 
+pub async fn download(
+    session_id: &str,
+    target: &str,
+    output: Option<&str>,
+    json_mode: bool,
+) -> Result<()> {
+    use base64::Engine;
+
+    let data = send_ok(Request::new(
+        actions::DOWNLOAD,
+        json!({
+            "session_id": session_id,
+            "target": target,
+        }),
+    ))
+    .await?;
+
+    let b64 = data
+        .get("data")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let filename = data
+        .get("filename")
+        .and_then(|v| v.as_str())
+        .unwrap_or("download");
+    let content_type = data
+        .get("content_type")
+        .and_then(|v| v.as_str())
+        .unwrap_or("application/octet-stream");
+    let size = data
+        .get("size")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(b64)
+        .map_err(|e| anyhow::anyhow!("failed to decode base64 data: {e}"))?;
+
+    let out_path = match output {
+        Some(p) => PathBuf::from(p),
+        None => PathBuf::from(filename),
+    };
+
+    fs::write(&out_path, &bytes)?;
+
+    if json_mode {
+        print_json(&json!({
+            "path": out_path.display().to_string(),
+            "content_type": content_type,
+            "size": size,
+        }))?;
+    } else {
+        println!(
+            "Downloaded {} ({}, {} bytes)",
+            out_path.display(),
+            content_type,
+            size,
+        );
+    }
+
+    Ok(())
+}
+
 pub async fn plugin(name: &str, session_id: &str, json_mode: bool) -> Result<()> {
     let plugin = crate::plugin::loader::load_plugin(name)?;
     let summary = crate::plugin::runner::run_plugin(&plugin, session_id).await?;

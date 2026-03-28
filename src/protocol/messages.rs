@@ -153,6 +153,7 @@ pub mod actions {
     pub const WAIT: &str = "wait";
     pub const GET_TEXT: &str = "get_text";
     pub const SCREENSHOT: &str = "screenshot";
+    pub const DOWNLOAD: &str = "download";
 }
 
 pub const PAGE_CHUNK_TYPE: &str = "page_chunk";

@@ -58,7 +58,7 @@ export interface PageChunk {
 }
 
 export interface ContentRequest {
-  type: 'snapshot' | 'click' | 'type' | 'wait' | 'presence_start' | 'presence_stop';
+  type: 'snapshot' | 'click' | 'type' | 'wait' | 'presence_start' | 'presence_stop' | 'resolve_url';
   params: Record<string, unknown>;
 }
 
