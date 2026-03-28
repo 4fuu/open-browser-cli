@@ -7,7 +7,8 @@ use tokio::net::TcpListener;
 use tokio::sync::{Mutex, oneshot};
 
 use crate::protocol::messages::{
-    PAGE_CHUNK_TYPE, PageChunk, RawSnapshot, Request, Response, actions,
+    DOWNLOAD_CHUNK_TYPE, DownloadChunk, PAGE_CHUNK_TYPE, PageChunk, RawSnapshot, Request, Response,
+    actions,
 };
 
 use super::native_msg;
@@ -16,6 +17,16 @@ const RELAY_ADDR: &str = "127.0.0.1:12899";
 
 type PendingMap = Arc<Mutex<HashMap<String, oneshot::Sender<Response>>>>;
 type SessionMap = Arc<Mutex<HashMap<String, SessionCache>>>;
+type DownloadMap = Arc<Mutex<HashMap<String, DownloadBuffer>>>;
+
+#[derive(Debug, Clone)]
+struct DownloadBuffer {
+    chunks: Vec<String>,
+    filename: Option<String>,
+    content_type: Option<String>,
+    size: Option<u64>,
+    complete: bool,
+}
 
 #[derive(Debug, Clone)]
 struct SessionCache {
@@ -32,10 +43,12 @@ pub async fn run() -> Result<()> {
 
     let pending: PendingMap = Arc::new(Mutex::new(HashMap::new()));
     let sessions: SessionMap = Arc::new(Mutex::new(HashMap::new()));
+    let downloads: DownloadMap = Arc::new(Mutex::new(HashMap::new()));
     let stdout = Arc::new(Mutex::new(tokio::io::stdout()));
 
     let pending_clone = Arc::clone(&pending);
     let sessions_clone = Arc::clone(&sessions);
+    let downloads_clone = Arc::clone(&downloads);
     tokio::spawn(async move {
         let mut stdin = tokio::io::stdin();
         loop {
@@ -44,6 +57,17 @@ pub async fn run() -> Result<()> {
                     if msg.get("type").and_then(|value| value.as_str()) == Some(PAGE_CHUNK_TYPE) {
                         if let Err(err) = handle_page_chunk(msg, &sessions_clone).await {
                             eprintln!("relay: failed to handle page chunk: {err}");
+                        }
+                        continue;
+                    }
+
+                    if msg.get("type").and_then(|value| value.as_str())
+                        == Some(DOWNLOAD_CHUNK_TYPE)
+                    {
+                        if let Err(err) =
+                            handle_download_chunk(msg, &downloads_clone).await
+                        {
+                            eprintln!("relay: failed to handle download chunk: {err}");
                         }
                         continue;
                     }
@@ -75,10 +99,11 @@ pub async fn run() -> Result<()> {
         let (stream, addr) = listener.accept().await?;
         let pending = Arc::clone(&pending);
         let sessions = Arc::clone(&sessions);
+        let downloads = Arc::clone(&downloads);
         let stdout = Arc::clone(&stdout);
 
         tokio::spawn(async move {
-            if let Err(err) = handle_client(stream, pending, sessions, stdout).await {
+            if let Err(err) = handle_client(stream, pending, sessions, downloads, stdout).await {
                 eprintln!("relay: client {addr} error: {err}");
             }
         });
@@ -89,6 +114,7 @@ async fn handle_client(
     stream: tokio::net::TcpStream,
     pending: PendingMap,
     sessions: SessionMap,
+    downloads: DownloadMap,
     stdout: Arc<Mutex<tokio::io::Stdout>>,
 ) -> Result<()> {
     let (reader, mut writer) = stream.into_split();
@@ -122,7 +148,7 @@ async fn handle_client(
             }
         };
 
-        let response = finalize_response(request, extension_response, &sessions).await?;
+        let response = finalize_response(request, extension_response, &sessions, &downloads).await?;
         write_response(&mut writer, &response).await?;
     }
 
@@ -180,6 +206,7 @@ async fn finalize_response(
     request: Request,
     extension_response: Response,
     sessions: &SessionMap,
+    downloads: &DownloadMap,
 ) -> Result<Response> {
     if !extension_response.is_success() {
         return Ok(extension_response);
@@ -210,6 +237,25 @@ async fn finalize_response(
             {
                 sessions.lock().await.remove(session_id);
             }
+            Ok(extension_response)
+        }
+        actions::DOWNLOAD => {
+            // If the extension streamed download data via download_chunk messages,
+            // assemble the chunks and include the full base64 data in the response.
+            let buf = downloads.lock().await.remove(&request.id);
+            if let Some(buf) = buf {
+                if buf.complete {
+                    let assembled_data = buf.chunks.join("");
+                    let data = serde_json::json!({
+                        "data": assembled_data,
+                        "filename": buf.filename.unwrap_or_else(|| "download".into()),
+                        "content_type": buf.content_type.unwrap_or_else(|| "application/octet-stream".into()),
+                        "size": buf.size.unwrap_or(0),
+                    });
+                    return Ok(Response::success(request.id, data));
+                }
+            }
+            // Fallback: return the extension response as-is (non-streamed or error)
             Ok(extension_response)
         }
         _ => Ok(extension_response),
@@ -259,6 +305,33 @@ async fn handle_page_chunk(msg: serde_json::Value, sessions: &SessionMap) -> Res
         snapshot.nodes.extend(chunk.nodes);
         cache.complete = chunk.done;
     }
+
+    Ok(())
+}
+
+async fn handle_download_chunk(msg: serde_json::Value, downloads: &DownloadMap) -> Result<()> {
+    let chunk: DownloadChunk = serde_json::from_value(msg)?;
+    let mut downloads = downloads.lock().await;
+    let buf = downloads
+        .entry(chunk.request_id.clone())
+        .or_insert(DownloadBuffer {
+            chunks: Vec::new(),
+            filename: None,
+            content_type: None,
+            size: None,
+            complete: false,
+        });
+
+    // First chunk carries metadata
+    if chunk.chunk_index == 0 {
+        buf.filename = chunk.filename;
+        buf.content_type = chunk.content_type;
+        buf.size = chunk.size;
+        buf.chunks.clear();
+    }
+
+    buf.chunks.push(chunk.data);
+    buf.complete = chunk.done;
 
     Ok(())
 }

@@ -68,7 +68,19 @@ export interface ContentResponse {
   error?: string;
 }
 
+export interface DownloadChunk {
+  type: 'download_chunk';
+  session_id: string;
+  request_id: string;
+  chunk_index: number;
+  data: string;
+  done: boolean;
+  filename?: string;
+  content_type?: string;
+  size?: number;
+}
+
 export interface ChunkEvent {
-  type: 'page_chunk';
-  chunk: PageChunk;
+  type: 'page_chunk' | 'download_chunk';
+  chunk: PageChunk | DownloadChunk;
 }

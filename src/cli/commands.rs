@@ -884,6 +884,22 @@ pub async fn view(
     Ok(())
 }
 
+fn sanitize_filename(raw: &str) -> String {
+    let name = std::path::Path::new(raw)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("download")
+        .to_string();
+
+    let name = name.replace(['/', '\\'], "_");
+
+    if name.is_empty() || name == "." || name == ".." {
+        "download".to_string()
+    } else {
+        name
+    }
+}
+
 pub async fn download(
     session_id: &str,
     target: &str,
@@ -924,7 +940,7 @@ pub async fn download(
 
     let out_path = match output {
         Some(p) => PathBuf::from(p),
-        None => PathBuf::from(filename),
+        None => PathBuf::from(sanitize_filename(filename)),
     };
 
     fs::write(&out_path, &bytes)?;

@@ -157,6 +157,24 @@ pub mod actions {
 }
 
 pub const PAGE_CHUNK_TYPE: &str = "page_chunk";
+pub const DOWNLOAD_CHUNK_TYPE: &str = "download_chunk";
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct DownloadChunk {
+    #[serde(rename = "type")]
+    pub message_type: String,
+    pub session_id: String,
+    pub request_id: String,
+    pub chunk_index: usize,
+    pub data: String,
+    pub done: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filename: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size: Option<u64>,
+}
 
 #[cfg(test)]
 mod tests {
