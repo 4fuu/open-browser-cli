@@ -293,15 +293,25 @@ class CursorAgent {
     const shadow = el.attachShadow({ mode: 'open' });
     shadow.innerHTML =
       '<style>' +
-      ':host{all:initial;--cursor-fill:#111111;--cursor-stroke:#ffffff;--cursor-scale:1;}' +
+      ':host{all:initial;--cursor-fill:#111111;--cursor-stroke:#ffffff;--cursor-scale:1;--cursor-idle:0;}' +
+      '.wrap{position:relative;display:inline-block;}' +
       'svg{display:block;transform:scale(var(--cursor-scale));transform-origin:2px 2px;' +
       'transition:transform 90ms ease,filter 120ms ease;' +
       'filter:drop-shadow(0 1px 2px rgba(0,0,0,0.45));}' +
       'path{fill:var(--cursor-fill);stroke:var(--cursor-stroke);stroke-width:1.5;stroke-linejoin:round;}' +
+      '.zzz{position:absolute;left:14px;top:-2px;font:bold 10px/1 sans-serif;' +
+      'color:#444;letter-spacing:2px;opacity:var(--cursor-idle);' +
+      'transition:opacity 400ms ease;pointer-events:none;' +
+      'text-shadow:0 1px 0 rgba(255,255,255,0.85);' +
+      'animation:zf 2s ease-in-out infinite;}' +
+      '@keyframes zf{0%,100%{transform:translateY(0)}50%{transform:translateY(-3px)}}' +
       '</style>' +
+      '<div class="wrap">' +
       '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="22" viewBox="0 0 14 24" aria-hidden="true">' +
       '<path d="M 1 1 L 1 19 L 5 14 L 8 22 L 11 21 L 8 13 L 13 13 Z"/>' +
-      '</svg>';
+      '</svg>' +
+      '<div class="zzz">zzz</div>' +
+      '</div>';
 
     document.documentElement.appendChild(el);
     cursorOverlay = el;
@@ -312,7 +322,8 @@ class CursorAgent {
   private syncAppearance(host: HTMLElement): void {
     host.style.setProperty('--cursor-fill', this.taskMode ? '#f5cb23' : '#111111');
     host.style.setProperty('--cursor-stroke', this.taskMode ? '#6c5600' : '#ffffff');
-    host.style.setProperty('--cursor-scale', '1');
+    host.style.setProperty('--cursor-scale', this.taskMode ? '1' : '0.65');
+    host.style.setProperty('--cursor-idle', this.taskMode ? '0' : '1');
   }
 
   private setTaskMode(value: boolean): void {
