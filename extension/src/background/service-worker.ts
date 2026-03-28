@@ -318,11 +318,19 @@ async function handleScreenshot(req: Request): Promise<Response> {
     return { id: req.id, ok: false, error: 'Could not determine window for tab' };
   }
 
+  // Record the currently active tab so we can restore focus after capture
+  const [previousTab] = await chrome.tabs.query({ active: true, windowId: tab.windowId });
+
   // Ensure the tab is active in its window before capturing
   await chrome.tabs.update(session.value.tab_id, { active: true });
 
   const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, options);
   const base64Data = dataUrl.split(',')[1];
+
+  // Restore previously active tab if it was different
+  if (previousTab && previousTab.id !== undefined && previousTab.id !== tab.id) {
+    await chrome.tabs.update(previousTab.id, { active: true });
+  }
 
   return {
     id: req.id,

@@ -287,7 +287,7 @@ enum Command {
         #[arg(long)]
         full_page: bool,
         /// Image quality for JPEG (0-100, default: PNG format)
-        #[arg(long)]
+        #[arg(long, value_parser = clap::value_parser!(u32).range(0..=100))]
         quality: Option<u32>,
         /// Output as JSON
         #[arg(long)]
