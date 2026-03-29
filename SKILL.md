@@ -1,6 +1,6 @@
 ---
 name: open-browser-cli
-description: "Drives a real browser session via browser-cli: open stateful sessions, inspect structured XML/JSON pages, search content, click, type, wait for page stability, read truncated text or paginated blocks, and run plugins. Use when login state, cookies, SPA rendering, or durable page interactions matter."
+description: "Drives a real browser session via browser-cli: open stateful sessions, inspect structured XML/JSON pages, search content, click, type, wait for page stability, read truncated text or paginated blocks, capture screenshots, download browser-accessible resources, and run plugins. Use when login state, cookies, SPA rendering, or durable page interactions matter."
 ---
 
 # browser-cli
@@ -56,12 +56,12 @@ When you pause:
 - The task needs a real browser tab with preserved login state, cookies, history, or form state.
 - The page is rendered client-side and raw HTTP is not enough.
 - You need low-noise XML/JSON instead of full HTML.
-- You need follow-up actions such as `click`, `type`, `wait`, `search`, `text`, `block`, or `plugin run`.
+- You need follow-up actions such as `click`, `type`, `wait`, `search`, `text`, `block`, `view`, `screenshot`, `download`, or `plugin run`.
 
 ## Do not use this skill for
 
 - Simple API calls or static page fetches.
-- Screenshot or visual diff workflows.
+- Pixel-accurate visual diff workflows.
 - Acting on stale element IDs from an older `page` result.
 
 ## Preconditions
@@ -133,6 +133,19 @@ browser-cli view s123 e3 --json --verbose
 ```
 
 By default, `view` narrows list/table matches to the single `item` or `row` containing the target element. Add `--verbose` to keep the full surrounding list/table context.
+
+### Capture or retrieve assets
+
+Use `screenshot` for the current viewport and `download` for browser-accessible files or media URLs.
+
+```bash
+browser-cli screenshot s123
+browser-cli screenshot s123 --output hero.png
+browser-cli screenshot s123 --quality 85 --json
+browser-cli download s123 e7
+browser-cli download s123 "https://example.com/file.pdf" --output file.pdf
+browser-cli download s123 e7 --json
+```
 
 ### Interact with the page
 

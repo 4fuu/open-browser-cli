@@ -50,7 +50,7 @@
 
 **Chrome：**
 
-在 Chrome 打开 `chrome://extensions`，开启「开发者模式」，点击「加载已解压的扩展程序」，选择 `extension/` 目录（开发模式）；或从 [Releases](../../releases) 下载 `.zip` 后以同样方式加载。
+在 Chrome 打开 `chrome://extensions`，开启「开发者模式」，点击「加载已解压的扩展程序」，选择 `extension/dist/chrome/` 目录（开发模式）；或从 [Releases](../../releases) 下载 `.zip`、解压后以同样方式加载。
 
 记录扩展 ID（形如 `abcdefghijklmnopabcdefghijklmnop`），后续注册时需要用到。
 
@@ -157,6 +157,8 @@ browser-cli text <session-id> <文本ID|数字> [-p <页码>] [--fresh] [--json]
 browser-cli block <session-id> <块ID|数字> [--source-page <页码>] [(-p <块页码>)|--all] [--fresh] [--json] [--verbose]
 browser-cli view <session-id> <目标> [-p <页码>] [--fresh] [--json] [--verbose]
 browser-cli wait <session-id> [--for <文本>] [--timeout <毫秒>] [--quiet] [--json]
+browser-cli screenshot <session-id> [--output <路径>] [--full-page] [--quality <0-100>] [--json]
+browser-cli download <session-id> <元素ID|URL> [--output <路径>] [--json]
 
 browser-cli plugin list [--json]
 browser-cli plugin run <名称> <session-id> [--json]
@@ -194,6 +196,8 @@ browser-cli teardown [--browser chrome|firefox]
 - `click` / `type` 的 `<目标>` 既可以是带前缀 ID（如 `e1`）、数字 ID（如 `1` 对应 `e1`），也可以是当前页交互元素的文本查询；查询会匹配按钮文本、链接文本、输入框 placeholder/value 等
 - `click` / `type` 默认会输出更新后的整页 XML；可用 `--quiet` 只看成功结果，用 `--json` 获取结构化摘要
 - `wait` 默认等待页面稳定并返回最新页面；`--for <文本>` 会轮询最新快照，直到页面里出现匹配该文本的元素
+- `screenshot` 可保存当前页面视口截图；指定 `--quality` 时会输出 JPEG，否则默认 PNG；`--full-page` 当前会提示并回退为视口截图
+- `download` 可下载浏览器当前会话可访问的资源；目标既可以是页面元素 ID（自动取其 `href` / `src`），也可以是直接 URL
 - `search` 在 XML/纯文本模式下仍返回 `page`、`tag`、上下文摘要，以及命中交互元素时的 `element_id`；在 `--json` 下默认返回紧凑结果，`--verbose` 才返回完整匹配结构
 - 长文本截断会明确显示为 `[...truncated]`
 - 超长 `list` / `table` 会在页面中先显示首段，并带上块级分页属性；分页按渲染后的 XML 行数预算切分，而不是按条目数量硬切；可用 `browser-cli block <session-id> <块ID或数字> --source-page <页码> -p <块页码>` 读取单页，或用 `--all` 一次展开整个块
@@ -244,8 +248,8 @@ cargo build --release
 ```bash
 cd extension
 npm install
-npm run build   # 产物：extension/dist/
-npm run pack    # 打包为 extension/dist/browser-cli-extension.zip
+npm run build   # 产物：extension/dist/chrome/ 和 extension/dist/firefox/
+npm run pack    # 打包为 extension/dist/browser-cli-extension.zip 和 browser-cli-extension.xpi
 ```
 
 ---

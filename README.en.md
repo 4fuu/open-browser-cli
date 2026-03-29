@@ -50,7 +50,7 @@ A browser session tool for the command line and AI agents. Uses a Chrome/Firefox
 
 **Chrome:**
 
-Open `chrome://extensions`, enable Developer Mode, click "Load unpacked", and select the `extension/` directory for development; or download the `.zip` from [Releases](../../releases) and load it the same way.
+Open `chrome://extensions`, enable Developer Mode, click "Load unpacked", and select `extension/dist/chrome/` for development; or download the `.zip` from [Releases](../../releases), extract it, and load that directory the same way.
 
 Save the extension ID, which looks like `abcdefghijklmnopabcdefghijklmnop`. You need it for Native Messaging registration.
 
@@ -157,6 +157,8 @@ browser-cli text <session-id> <text-id|number> [-p <page>] [--fresh] [--json]
 browser-cli block <session-id> <block-id|number> [--source-page <page>] [(-p <block-page>)|--all] [--fresh] [--json] [--verbose]
 browser-cli view <session-id> <element-id|number|query> [-p <page>] [--fresh] [--json] [--verbose]
 browser-cli wait <session-id> [--for <text>] [--timeout <ms>] [--quiet] [--json]
+browser-cli screenshot <session-id> [--output <path>] [--full-page] [--quality <0-100>] [--json]
+browser-cli download <session-id> <element-id|url> [--output <path>] [--json]
 
 browser-cli plugin list [--json]
 browser-cli plugin run <name> <session-id> [--json]
@@ -194,6 +196,8 @@ browser-cli teardown [--browser chrome|firefox]
 - The `<target>` for `click` / `type` accepts a prefixed ID (`e1`), a bare number (`1` maps to `e1`), or a text query matching button text, link text, or input placeholder/value
 - `click` / `type` output the updated full page XML by default; use `--quiet` for a success summary, `--json` for a structured response
 - `wait` returns the latest page on success; use `--quiet` in automation pipelines when you only need the success/timeout result
+- `screenshot` saves the current page viewport locally; passing `--quality` switches output to JPEG, otherwise it defaults to PNG; `--full-page` currently warns and falls back to viewport capture
+- `download` retrieves a resource that is accessible from the browser's current session context; the target can be either a page element ID, which resolves its `href` / `src`, or a direct URL
 - `search` still returns `page`, `tag`, a context snippet, and `element_id` in plain text mode; in `--json` mode it returns a compact result by default, and the full match structure with `--verbose`
 - Truncated text is shown as `[...truncated]`; oversized `list` / `table` blocks are paginated by XML line budget rather than item count — use `block --source-page <page> -p <block-page>` to read a single page, or `--all` to expand the entire block
 - `view` returns a focused view of an element, truncated text, or block; target accepts `e3`, `3`, `t1`, `b1`, or a text query
@@ -240,8 +244,8 @@ cargo build --release
 ```bash
 cd extension
 npm install
-npm run build
-npm run pack
+npm run build   # outputs extension/dist/chrome/ and extension/dist/firefox/
+npm run pack    # produces extension/dist/browser-cli-extension.zip and browser-cli-extension.xpi
 ```
 
 ---
