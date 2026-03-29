@@ -1259,19 +1259,39 @@ fn native_host_manifest_path(browser: &str) -> Result<PathBuf> {
             other => bail!("unsupported browser: {other}"),
         }
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
     {
         let home = std::env::var("HOME").map(PathBuf::from)?;
-        match browser {
-            "chrome" => {
-                Ok(home
-                    .join(".config/google-chrome/NativeMessagingHosts/com.browser_cli.relay.json"))
-            }
-            "firefox" => {
-                Ok(home.join(".mozilla/native-messaging-hosts/com.browser_cli.relay.json"))
-            }
-            other => bail!("unsupported browser: {other}"),
+        native_host_manifest_path_from_home(browser, &home)
+    }
+    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+    {
+        let home = std::env::var("HOME").map(PathBuf::from)?;
+        native_host_manifest_path_from_home(browser, &home)
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn native_host_manifest_path_from_home(browser: &str, home: &Path) -> Result<PathBuf> {
+    match browser {
+        "chrome" => Ok(home.join(
+            "Library/Application Support/Google/Chrome/NativeMessagingHosts/com.browser_cli.relay.json",
+        )),
+        "firefox" => Ok(home.join(
+            "Library/Application Support/Mozilla/NativeMessagingHosts/com.browser_cli.relay.json",
+        )),
+        other => bail!("unsupported browser: {other}"),
+    }
+}
+
+#[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+fn native_host_manifest_path_from_home(browser: &str, home: &Path) -> Result<PathBuf> {
+    match browser {
+        "chrome" => {
+            Ok(home.join(".config/google-chrome/NativeMessagingHosts/com.browser_cli.relay.json"))
         }
+        "firefox" => Ok(home.join(".mozilla/native-messaging-hosts/com.browser_cli.relay.json")),
+        other => bail!("unsupported browser: {other}"),
     }
 }
 
@@ -1343,6 +1363,19 @@ mod tests {
     fn chrome_setup_requires_extension_id() {
         let err = validate_setup_args("chrome", None).unwrap_err();
         assert_eq!(err.to_string(), "chrome setup requires --extension-id");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn native_host_manifest_path_uses_macos_chrome_location() {
+        let path = native_host_manifest_path_from_home("chrome", Path::new("/tmp/browser-cli-home"))
+            .unwrap();
+        assert_eq!(
+            path,
+            PathBuf::from(
+                "/tmp/browser-cli-home/Library/Application Support/Google/Chrome/NativeMessagingHosts/com.browser_cli.relay.json"
+            )
+        );
     }
 
     #[test]

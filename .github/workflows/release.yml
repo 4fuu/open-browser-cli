@@ -156,10 +156,11 @@ jobs:
             exit 1
           fi
           cd extension
+          npm run build
           npx web-ext sign \
             --channel=unlisted \
             --no-input \
-            --source-dir . \
+            --source-dir dist/firefox \
             --artifacts-dir dist/firefox-signed \
             --api-key "$WEB_EXT_API_KEY" \
             --api-secret "$WEB_EXT_API_SECRET"
