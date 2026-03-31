@@ -65,6 +65,7 @@ jobs:
           restore-keys: ${{ runner.os }}-${{ matrix.target }}-cargo-
 
       - name: Build
+        shell: bash
         env:
           BROWSER_CLI_VERSION: ${{ env.BUILD_VERSION }}
         run: |
