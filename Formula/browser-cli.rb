@@ -17,11 +17,11 @@ class BrowserCli < Formula
 
   on_linux do
     on_arm do
-      url "https://github.com/4fuu/open-browser-cli/releases/download/0.6.0/browser-cli-aarch64-unknown-linux-gnu.tar.gz"
+      url "https://github.com/4fuu/open-browser-cli/releases/download/0.6.0/browser-cli-aarch64-unknown-linux-musl.tar.gz"
       sha256 "68a687f683eec026163b91003a3732af4941a104ed08da1993fcde046e456f07" # linux_arm64
     end
     on_intel do
-      url "https://github.com/4fuu/open-browser-cli/releases/download/0.6.0/browser-cli-x86_64-unknown-linux-gnu.tar.gz"
+      url "https://github.com/4fuu/open-browser-cli/releases/download/0.6.0/browser-cli-x86_64-unknown-linux-musl.tar.gz"
       sha256 "0fa845db56096ea1453f4b977e6c5cc5a4a9c8bc3fd3453cf846cfe93ead67e1" # linux_x86
     end
   end
