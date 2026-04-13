@@ -1,12 +1,12 @@
 {
-    "version": "0.6.1",
+    "version": "0.6.2",
     "description": "Browser session CLI with Native Messaging relay",
     "homepage": "https://github.com/4fuu/open-browser-cli",
     "license": "MIT",
     "architecture": {
         "64bit": {
-            "url": "https://github.com/4fuu/open-browser-cli/releases/download/0.6.1/browser-cli-x86_64-pc-windows-msvc.zip",
-            "hash": "0a1cda50f4befceccba10cb34772cafa1dff4f5ad735b0be51273b0686222b33"
+            "url": "https://github.com/4fuu/open-browser-cli/releases/download/0.6.2/browser-cli-x86_64-pc-windows-msvc.zip",
+            "hash": "ec72055e93c451003c5834e9954a6761bb13fe6e1cc60e2310338b2ada1ca95b"
         }
     },
     "bin": "browser-cli.exe",
@@ -16,7 +16,7 @@
     "autoupdate": {
         "architecture": {
             "64bit": {
-                "url": "https://github.com/4fuu/open-browser-cli/releases/download/0.6.1/browser-cli-x86_64-pc-windows-msvc.zip"
+                "url": "https://github.com/4fuu/open-browser-cli/releases/download/0.6.2/browser-cli-x86_64-pc-windows-msvc.zip"
             }
         }
     }
