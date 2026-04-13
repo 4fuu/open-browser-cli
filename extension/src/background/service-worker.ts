@@ -82,6 +82,7 @@ async function handleRequest(req: Request): Promise<Response> {
       case 'get_page':
         return await handleSnapshotRequest(req);
       case 'click':
+      case 'scroll':
       case 'type':
       case 'wait':
         return await forwardToContent(req);

@@ -448,6 +448,8 @@ async function handleMessage(req: ContentRequest): Promise<ContentResponse> {
         return await handleSnapshot(req);
       case 'click':
         return await handleClick(req);
+      case 'scroll':
+        return await handleScroll(req);
       case 'type':
         return await handleType(req);
       case 'wait':
@@ -639,6 +641,36 @@ async function handleType(req: ContentRequest): Promise<ContentResponse> {
         navigated: beforeUrl !== location.href,
         url: location.href,
         title: document.title,
+      },
+    };
+  } finally {
+    cursorAgent.endTask();
+  }
+}
+
+async function handleScroll(req: ContentRequest): Promise<ContentResponse> {
+  const top = optionalNumber(req.params.top);
+  if (top === undefined) {
+    return { ok: false, error: 'top is required' };
+  }
+
+  cursorAgent.beginTask();
+  try {
+    window.scrollTo({
+      top: Math.max(0, top),
+      left: window.scrollX,
+      behavior: 'auto',
+    });
+    await nextFrame();
+    await nextFrame();
+
+    return {
+      ok: true,
+      data: {
+        action: 'scroll',
+        changed: true,
+        navigated: false,
+        scroll_top: window.scrollY,
       },
     };
   } finally {
