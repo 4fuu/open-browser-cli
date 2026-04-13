@@ -113,14 +113,20 @@ enum Command {
         /// Session ID
         session_id: String,
         /// Page number for paginated content
-        #[arg(short, long)]
+        #[arg(short, long, conflicts_with = "all")]
         page: Option<u32>,
         /// Go to next page relative to current scroll position
-        #[arg(long, conflicts_with_all = ["page", "prev"])]
+        #[arg(long, conflicts_with_all = ["page", "prev", "all"])]
         next: bool,
         /// Go to previous page relative to current scroll position
-        #[arg(long, conflicts_with_all = ["page", "next"])]
+        #[arg(long, conflicts_with_all = ["page", "next", "all"])]
         prev: bool,
+        /// Capture and aggregate all logical pages into a single reading view
+        #[arg(long, conflicts_with_all = ["page", "next", "prev"])]
+        all: bool,
+        /// Delay after each scroll before fetching the next page snapshot (milliseconds; only with --all)
+        #[arg(long, requires = "all")]
+        settle: Option<u64>,
         /// Bypass cache and fetch a fresh snapshot from the browser
         #[arg(long)]
         fresh: bool,
@@ -403,10 +409,17 @@ async fn main() -> anyhow::Result<()> {
             page,
             next,
             prev,
+            all,
+            settle,
             fresh,
             json,
             verbose,
-        } => cli::commands::page(session_id, page, next, prev, fresh, json, verbose).await?,
+        } => {
+            cli::commands::page(
+                session_id, page, next, prev, all, settle, fresh, json, verbose,
+            )
+            .await?
+        }
         Command::Click {
             ref session_id,
             ref target,
@@ -485,7 +498,17 @@ async fn main() -> anyhow::Result<()> {
             json,
             verbose,
         } => {
-            cli::commands::block(session_id, block_id, source_page, page, all, fresh, json, verbose).await?
+            cli::commands::block(
+                session_id,
+                block_id,
+                source_page,
+                page,
+                all,
+                fresh,
+                json,
+                verbose,
+            )
+            .await?
         }
         Command::View {
             ref session_id,
@@ -501,7 +524,10 @@ async fn main() -> anyhow::Result<()> {
             full_page,
             quality,
             json,
-        } => cli::commands::screenshot(session_id, output.as_deref(), full_page, quality, json).await?,
+        } => {
+            cli::commands::screenshot(session_id, output.as_deref(), full_page, quality, json)
+                .await?
+        }
         Command::Download {
             ref session_id,
             ref target,
@@ -544,6 +570,8 @@ fn should_run_as_native_host(args: &[String]) -> bool {
 mod tests {
     use super::build_info;
     use super::should_run_as_native_host;
+    use super::{Cli, Command};
+    use clap::Parser;
 
     #[test]
     fn native_host_detection_matches_browser_args() {
@@ -569,5 +597,31 @@ mod tests {
             build_info::resolve_version(Some("v1.2.3 (abc1234)")),
             "v1.2.3 (abc1234)"
         );
+    }
+
+    #[test]
+    fn page_all_accepts_settle_flag() {
+        let cli =
+            Cli::try_parse_from(["browser-cli", "page", "s1", "--all", "--settle", "750"]).unwrap();
+
+        match cli.command {
+            Command::Page { all, settle, .. } => {
+                assert!(all);
+                assert_eq!(settle, Some(750));
+            }
+            _ => panic!("unexpected command"),
+        }
+    }
+
+    #[test]
+    fn page_all_conflicts_with_explicit_page_navigation_flags() {
+        assert!(Cli::try_parse_from(["browser-cli", "page", "s1", "--all", "--next"]).is_err());
+        assert!(Cli::try_parse_from(["browser-cli", "page", "s1", "--all", "--prev"]).is_err());
+        assert!(Cli::try_parse_from(["browser-cli", "page", "s1", "--all", "-p", "2"]).is_err());
+    }
+
+    #[test]
+    fn page_settle_requires_all() {
+        assert!(Cli::try_parse_from(["browser-cli", "page", "s1", "--settle", "500"]).is_err());
     }
 }

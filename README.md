@@ -149,7 +149,7 @@ browser-cli close <session-id> [--json]
 browser-cli close --all [--json]
 browser-cli --version
 
-browser-cli page <session-id> [-p <页码>] [--next] [--prev] [--fresh] [--json] [--verbose]
+browser-cli page <session-id> [-p <页码>] [--next] [--prev] [--all] [--settle <毫秒>] [--fresh] [--json] [--verbose]
 browser-cli click <session-id> <目标> [-p <页码>] [--new-session] [--fresh] [--quiet] [--json]
 browser-cli type <session-id> <目标> <文本> [-p <页码>] [--fresh] [--quiet] [--json]
 browser-cli search <session-id> <关键词> [--fresh] [--json] [--verbose]
@@ -188,11 +188,14 @@ browser-cli teardown [--browser chrome|firefox]
 - `t1`, `t2`, ... — 被截断的长文本 ID，用 `text` 命令查看完整内容；参数支持 `t1` 或 `1`
 - `b1`, `b2`, ... — 被分页的长 `list` / `table` 块 ID，用 `block` 命令继续查看后续分页；参数支持 `b1` 或 `1`
 - `--next` / `--prev` 按当前滚动位置相对翻页
+- `--all` 会按逻辑页自动滚动、等待懒加载渲染并聚合成单页阅读视图；输出固定为 `current=1 total=1`
+- `--settle <毫秒>` 仅配合 `page --all` 使用，控制每次滚动后的固定等待时间，默认 `500`
 - `--fresh` 跳过缓存，强制从浏览器获取最新快照
 - `--version` 显示构建时注入的版本号；若未注入则显示 `unknown`
 - `open` 默认会在创建会话后直接输出当前页；用 `--quiet` 只看会话信息，用 `--wait 0` 可跳过打开后的稳定等待
 - `open` / `close` / `list` / `search` / `wait` / `plugin` / `view` 全部支持 `--json`
 - `page` / `search` / `block` / `view` 支持 `--verbose`：主要用于拿完整 JSON 细节；不带时，`--json` 默认返回更紧凑的数据
+- `page --all` 更偏全量阅读视图，方便 AI/用户一次拿完整内容；如果后续要点击或输入，建议回到普通 `page` / `page -p N` 重新获取当前页元素 ID
 - `click` / `type` 的 `<目标>` 既可以是带前缀 ID（如 `e1`）、数字 ID（如 `1` 对应 `e1`），也可以是当前页交互元素的文本查询；查询会匹配按钮文本、链接文本、输入框 placeholder/value 等
 - `click` / `type` 默认会输出更新后的整页 XML；可用 `--quiet` 只看成功结果，用 `--json` 获取结构化摘要
 - `wait` 默认等待页面稳定并返回最新页面；`--for <文本>` 会轮询最新快照，直到页面里出现匹配该文本的元素
