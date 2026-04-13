@@ -19,6 +19,7 @@ const NATIVE_HOST_NAME: &str = "com.browser_cli.relay";
 const CHROME_EXTENSION_PLACEHOLDER: &str = "REPLACE_WITH_EXTENSION_ID";
 const FIREFOX_EXTENSION_PLACEHOLDER: &str = "4fu@browser-cli";
 const DEFAULT_PAGE_ALL_SETTLE_MS: u64 = 500;
+const NODE_IDENTITY_KEY_SEPARATOR: &str = "\u{1f}";
 
 #[derive(Debug, Clone, Serialize)]
 struct ActionOutput {
@@ -1241,7 +1242,9 @@ fn aggregate_pages(pages: Vec<PageData>) -> PageData {
     }
 
     let mut pages = pages.into_iter();
-    let first_page = pages.next().expect("pages checked non-empty");
+    let first_page = pages
+        .next()
+        .expect("pages iterator should not be empty after checking");
     let mut aggregated_nodes = first_page.nodes;
 
     for page in pages {
@@ -1411,7 +1414,7 @@ fn child_identity_keys(children: &[Node]) -> String {
         .iter()
         .map(node_identity_key)
         .collect::<Vec<_>>()
-        .join("\u{1f}")
+        .join(NODE_IDENTITY_KEY_SEPARATOR)
 }
 
 fn reassign_page_node_ids(nodes: &mut [Node]) {
