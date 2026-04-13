@@ -1213,7 +1213,9 @@ async fn fetch_all_pages_from_snapshot(
             break;
         }
 
-        eprintln!("Scrolling {target_page}/{total_pages}...");
+        if total_pages > 1 {
+            eprintln!("Scrolling {target_page}/{total_pages}...");
+        }
         scroll_session_to(session_id, scroll_top_for_page(&snapshot, target_page)).await?;
         sleep(Duration::from_millis(settle_ms)).await;
         snapshot = fetch_snapshot(session_id, actions::GET_PAGE_FRESH).await?;
@@ -1246,9 +1248,10 @@ fn aggregate_pages(pages: Vec<PageData>) -> PageData {
         .next()
         .expect("pages iterator should not be empty after checking");
     let mut aggregated_nodes = first_page.nodes;
+    let mut seen_keys: HashSet<String> = aggregated_nodes.iter().map(node_identity_key).collect();
 
     for page in pages {
-        append_page_nodes(&mut aggregated_nodes, page.nodes);
+        append_page_nodes(&mut aggregated_nodes, &mut seen_keys, page.nodes);
     }
 
     reassign_page_node_ids(&mut aggregated_nodes);
@@ -1269,13 +1272,19 @@ fn aggregate_pages(pages: Vec<PageData>) -> PageData {
     }
 }
 
-fn append_page_nodes(aggregated: &mut Vec<Node>, incoming: Vec<Node>) {
+fn append_page_nodes(
+    aggregated: &mut Vec<Node>,
+    seen_keys: &mut HashSet<String>,
+    incoming: Vec<Node>,
+) {
     if aggregated.is_empty() {
-        aggregated.extend(incoming);
+        for node in incoming {
+            seen_keys.insert(node_identity_key(&node));
+            aggregated.push(node);
+        }
         return;
     }
 
-    let seen_keys: HashSet<String> = aggregated.iter().map(node_identity_key).collect();
     let mut skipping_prefix_duplicates = true;
 
     for node in incoming {
@@ -1285,6 +1294,7 @@ fn append_page_nodes(aggregated: &mut Vec<Node>, incoming: Vec<Node>) {
         }
 
         skipping_prefix_duplicates = false;
+        seen_keys.insert(key);
         aggregated.push(node);
     }
 }
