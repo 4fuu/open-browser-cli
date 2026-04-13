@@ -221,20 +221,19 @@ pub async fn page(
         actions::GET_PAGE
     };
     let snapshot = fetch_snapshot(session_id, action).await?;
-    let resolved_page = if next || prev {
-        let viewport_height = snapshot.viewport.height.max(1.0);
-        let scroll_height = snapshot.scroll.height.max(viewport_height);
-        let total_pages = (scroll_height / viewport_height).ceil().max(1.0) as u32;
-        let current_page =
-            ((snapshot.scroll.top / viewport_height).floor() as u32 + 1).clamp(1, total_pages);
-        let target = if next {
-            (current_page + 1).min(total_pages)
-        } else {
-            current_page.saturating_sub(1).max(1)
-        };
-        Some(target)
+    let resolved_page = resolve_requested_page(&snapshot, page_num, next, prev);
+    let snapshot = if let Some(target_page) = resolved_page {
+        send_ok(Request::new(
+            actions::SCROLL,
+            json!({
+                "session_id": session_id,
+                "top": scroll_top_for_page(&snapshot, target_page),
+            }),
+        ))
+        .await?;
+        fetch_snapshot(session_id, actions::GET_PAGE_FRESH).await?
     } else {
-        page_num
+        snapshot
     };
     let page_data = parse_page_from_snapshot(&snapshot, resolved_page)?;
     println!("{}", crate::cli::output::format_page(&page_data, json_mode, verbose));
@@ -1200,6 +1199,44 @@ fn is_wait_timeout_error(response: &Response) -> bool {
         .unwrap_or(false)
 }
 
+fn total_pages_for_snapshot(snapshot: &crate::protocol::messages::RawSnapshot) -> u32 {
+    let viewport_height = snapshot.viewport.height.max(1.0);
+    let scroll_height = snapshot.scroll.height.max(viewport_height);
+    (scroll_height / viewport_height).ceil().max(1.0) as u32
+}
+
+fn current_page_for_snapshot(snapshot: &crate::protocol::messages::RawSnapshot) -> u32 {
+    let viewport_height = snapshot.viewport.height.max(1.0);
+    let total_pages = total_pages_for_snapshot(snapshot);
+    ((snapshot.scroll.top / viewport_height).floor() as u32 + 1).clamp(1, total_pages)
+}
+
+fn resolve_requested_page(
+    snapshot: &crate::protocol::messages::RawSnapshot,
+    page_num: Option<u32>,
+    next: bool,
+    prev: bool,
+) -> Option<u32> {
+    let total_pages = total_pages_for_snapshot(snapshot);
+    if next || prev {
+        let current_page = current_page_for_snapshot(snapshot);
+        Some(if next {
+            (current_page + 1).min(total_pages)
+        } else {
+            current_page.saturating_sub(1).max(1)
+        })
+    } else {
+        page_num.map(|page| page.clamp(1, total_pages))
+    }
+}
+
+fn scroll_top_for_page(snapshot: &crate::protocol::messages::RawSnapshot, page_num: u32) -> f64 {
+    let viewport_height = snapshot.viewport.height.max(1.0);
+    let scroll_height = snapshot.scroll.height.max(viewport_height);
+    let max_scroll_top = (scroll_height - viewport_height).max(0.0);
+    ((page_num.saturating_sub(1) as f64) * viewport_height).min(max_scroll_top)
+}
+
 fn print_json<T: Serialize>(value: &T) -> Result<()> {
     println!("{}", serde_json::to_string_pretty(value)?);
     Ok(())
@@ -1339,7 +1376,23 @@ fn validate_setup_args(browser: &str, extension_id: Option<&str>) -> Result<()> 
 mod tests {
     use super::*;
     use crate::page::structure::{Node, StoredBlock};
-    use crate::protocol::messages::Response;
+    use crate::protocol::messages::{RawSnapshot, Response, ScrollState, Viewport};
+
+    fn snapshot(scroll_top: f64, scroll_height: f64, viewport_height: f64) -> RawSnapshot {
+        RawSnapshot {
+            url: "https://example.com".into(),
+            title: "Example".into(),
+            viewport: Viewport {
+                width: 1280.0,
+                height: viewport_height,
+            },
+            scroll: ScrollState {
+                top: scroll_top,
+                height: scroll_height,
+            },
+            nodes: Vec::new(),
+        }
+    }
 
     #[test]
     fn native_host_manifest_supports_chrome() {
@@ -1513,6 +1566,27 @@ mod tests {
         let text = err.to_string();
         assert!(text.contains("browser-cli page s1 -p 3"));
         assert!(text.contains("--fresh"));
+    }
+
+    #[test]
+    fn resolve_requested_page_advances_to_adjacent_page() {
+        let snapshot = snapshot(850.0, 2400.0, 800.0);
+        assert_eq!(resolve_requested_page(&snapshot, None, true, false), Some(3));
+        assert_eq!(resolve_requested_page(&snapshot, None, false, true), Some(1));
+    }
+
+    #[test]
+    fn resolve_requested_page_clamps_explicit_page_to_bounds() {
+        let snapshot = snapshot(0.0, 1500.0, 800.0);
+        assert_eq!(resolve_requested_page(&snapshot, Some(0), false, false), Some(1));
+        assert_eq!(resolve_requested_page(&snapshot, Some(9), false, false), Some(2));
+    }
+
+    #[test]
+    fn scroll_top_for_page_caps_to_maximum_scroll_offset() {
+        let snapshot = snapshot(0.0, 1500.0, 800.0);
+        assert_eq!(scroll_top_for_page(&snapshot, 2), 700.0);
+        assert_eq!(scroll_top_for_page(&snapshot, 9), 700.0);
     }
 
     #[test]

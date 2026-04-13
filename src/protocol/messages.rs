@@ -149,6 +149,7 @@ pub mod actions {
     pub const GET_PAGE_FRESH: &str = "get_page_fresh";
     pub const SEARCH: &str = "search";
     pub const CLICK: &str = "click";
+    pub const SCROLL: &str = "scroll";
     pub const TYPE: &str = "type";
     pub const WAIT: &str = "wait";
     pub const GET_TEXT: &str = "get_text";
