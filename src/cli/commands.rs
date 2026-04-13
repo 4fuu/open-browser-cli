@@ -1217,16 +1217,16 @@ fn resolve_requested_page(
     next: bool,
     prev: bool,
 ) -> Option<u32> {
+    let total_pages = total_pages_for_snapshot(snapshot);
     if next || prev {
         let current_page = current_page_for_snapshot(snapshot);
-        let total_pages = total_pages_for_snapshot(snapshot);
         Some(if next {
             (current_page + 1).min(total_pages)
         } else {
             current_page.saturating_sub(1).max(1)
         })
     } else {
-        page_num.map(|page| page.clamp(1, total_pages_for_snapshot(snapshot)))
+        page_num.map(|page| page.clamp(1, total_pages))
     }
 }
 

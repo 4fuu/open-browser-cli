@@ -662,7 +662,6 @@ async function handleScroll(req: ContentRequest): Promise<ContentResponse> {
       behavior: 'auto',
     });
     await nextFrame();
-    await nextFrame();
 
     return {
       ok: true,
