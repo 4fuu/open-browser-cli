@@ -15,6 +15,7 @@ description: "Drives a real browser session via browser-cli: open stateful sessi
 - Prefer `--json` when another tool or agent will consume the result.
 - Use `--verbose` with `page`, `search`, `block`, or `view` when you need full JSON detail instead of the default compact form.
 - Use `--fresh` when the cache may be stale or the page is highly dynamic.
+- Use `page --all` when you need a full reading pass over a long or lazy-loaded page; add `--settle <ms>` if the site needs more time after each auto-scroll.
 - `open`, `click`, `type`, and `wait` return the current page by default; use `--quiet` when you only need a compact success result.
 - Use `click --new-session` only for link elements with `href`. It opens the destination in a new session and keeps the source session unchanged.
 
@@ -94,6 +95,8 @@ browser-cli page s123
 browser-cli page s123 -p 2
 browser-cli page s123 --next
 browser-cli page s123 --prev
+browser-cli page s123 --all
+browser-cli page s123 --all --settle 1000 --json
 browser-cli page s123 --fresh
 ```
 
@@ -175,6 +178,7 @@ browser-cli type s123 3 "hello world" --quiet
 - Long text may be truncated in-page and assigned `t1`, `t2`, etc.; `text` accepts either `t1` or `1`.
 - Large lists or tables may be exposed as block IDs `b1`, `b2`, etc.; `block` accepts either `b1` or `1`.
 - Pagination is viewport-based. `page -p N` reads a logical page slice without scrolling the browser manually.
+- `page --all` auto-scrolls and merges all logical pages into a single reading-oriented result. Refresh with a normal `page` before acting on IDs from a live page.
 
 ## Plugin usage
 

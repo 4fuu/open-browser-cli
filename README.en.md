@@ -149,7 +149,7 @@ browser-cli close <session-id> [--json]
 browser-cli close --all [--json]
 browser-cli --version
 
-browser-cli page <session-id> [-p <page>] [--next] [--prev] [--fresh] [--json] [--verbose]
+browser-cli page <session-id> [-p <page>] [--next] [--prev] [--all] [--settle <ms>] [--fresh] [--json] [--verbose]
 browser-cli click <session-id> <element-id|number|query> [-p <page>] [--new-session] [--fresh] [--quiet] [--json]
 browser-cli type <session-id> <element-id|number|query> <text> [-p <page>] [--fresh] [--quiet] [--json]
 browser-cli search <session-id> <query> [--fresh] [--json] [--verbose]
@@ -188,11 +188,14 @@ browser-cli teardown [--browser chrome|firefox]
 - `t1`, `t2`, ... are IDs for truncated text blocks, readable with `text`; both `t1` and `1` are accepted
 - `b1`, `b2`, ... are IDs for paginated list/table blocks, readable with `block`; both `b1` and `1` are accepted
 - `--next` / `--prev` paginate relative to the current scroll position
+- `--all` auto-scrolls through every logical page, waits for lazy content to render, and aggregates the result into one reading view; the output is always `current=1 total=1`
+- `--settle <ms>` only applies to `page --all` and controls the fixed delay after each scroll; defaults to `500`
 - `--fresh` bypasses the Relay cache and fetches a fresh browser snapshot
 - `--version` prints the version injected at build time, or `unknown` if not set
 - `open` returns the page structure by default; use `--quiet` for session info only, `--wait 0` to skip the post-open stability wait
 - `open` / `close` / `list` / `search` / `wait` / `plugin` / `view` all support `--json`
 - `page` / `search` / `block` / `view` support `--verbose`; this mainly matters for JSON mode, where the default `--json` output is compact and `--verbose` returns full detail
+- `page --all` is optimized for full-page reading; if you need to click or type afterwards, run a normal `page` / `page -p N` again to get current actionable IDs
 - The `<target>` for `click` / `type` accepts a prefixed ID (`e1`), a bare number (`1` maps to `e1`), or a text query matching button text, link text, or input placeholder/value
 - `click` / `type` output the updated full page XML by default; use `--quiet` for a success summary, `--json` for a structured response
 - `wait` returns the latest page on success; use `--quiet` in automation pipelines when you only need the success/timeout result
