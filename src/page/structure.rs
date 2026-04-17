@@ -247,10 +247,11 @@ struct BuildState {
     full_blocks: HashMap<String, StoredBlock>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 struct ViewFilter {
     page_top: f64,
     page_bottom: f64,
+    expand_blocks: bool,
 }
 
 pub fn truncate_text(text: &str, max_len: usize) -> String {
@@ -277,19 +278,44 @@ pub fn parse_page_from_snapshot(
     snapshot: &RawSnapshot,
     requested_page: Option<u32>,
 ) -> Result<PageData> {
+    build_page_from_snapshot(snapshot, requested_page, false)
+}
+
+pub fn parse_full_page_from_snapshot(snapshot: &RawSnapshot) -> Result<PageData> {
+    build_page_from_snapshot(snapshot, None, true)
+}
+
+fn build_page_from_snapshot(
+    snapshot: &RawSnapshot,
+    requested_page: Option<u32>,
+    expand_blocks: bool,
+) -> Result<PageData> {
     let viewport_height = snapshot.viewport.height.max(1.0);
     let scroll_height = snapshot.scroll.height.max(viewport_height);
     let total_pages = (scroll_height / viewport_height).ceil().max(1.0) as u32;
     let fallback_page = (snapshot.scroll.top / viewport_height).floor() as u32 + 1;
-    let current_page = requested_page
-        .unwrap_or(fallback_page)
-        .clamp(1, total_pages.max(1));
+    let current_page = if expand_blocks {
+        1
+    } else {
+        requested_page
+            .unwrap_or(fallback_page)
+            .clamp(1, total_pages.max(1))
+    };
 
-    let page_top = (current_page.saturating_sub(1) as f64) * viewport_height;
-    let page_bottom = page_top + viewport_height;
+    let page_top = if expand_blocks {
+        0.0
+    } else {
+        (current_page.saturating_sub(1) as f64) * viewport_height
+    };
+    let page_bottom = if expand_blocks {
+        scroll_height
+    } else {
+        page_top + viewport_height
+    };
     let filter = ViewFilter {
         page_top,
         page_bottom,
+        expand_blocks,
     };
 
     let node_by_ref: HashMap<&str, &RawNode> = snapshot
@@ -337,7 +363,7 @@ pub fn parse_page_from_snapshot(
         url: snapshot.url.clone(),
         title: snapshot.title.clone(),
         current_page,
-        total_pages,
+        total_pages: if expand_blocks { 1 } else { total_pages },
         truncated: false,
         shown,
         total,
@@ -448,7 +474,13 @@ fn narrow_view_to_item(nodes: Vec<Node>, element_id: &str) -> Vec<Node> {
         Node::List { children, .. } | Node::Table { children, .. } => {
             for child in children {
                 match child {
-                    Node::Item { children: item_children, .. } | Node::Row { children: item_children } => {
+                    Node::Item {
+                        children: item_children,
+                        ..
+                    }
+                    | Node::Row {
+                        children: item_children,
+                    } => {
                         if subtree_contains_id(item_children, element_id) {
                             return vec![child.clone()];
                         }
@@ -470,12 +502,20 @@ pub fn compact_nodes(nodes: Vec<Node>) -> Vec<Node> {
     let mut result = Vec::new();
     for node in nodes {
         match node {
-            Node::Container { ref tag, ref role, children, .. }
-                if !is_compact_visible_container(tag, role.as_deref()) =>
-            {
+            Node::Container {
+                ref tag,
+                ref role,
+                children,
+                ..
+            } if !is_compact_visible_container(tag, role.as_deref()) => {
                 result.extend(compact_nodes(children));
             }
-            Node::Container { tag, role, class_name, children } => {
+            Node::Container {
+                tag,
+                role,
+                class_name,
+                children,
+            } => {
                 result.push(Node::Container {
                     tag,
                     role,
@@ -483,29 +523,62 @@ pub fn compact_nodes(nodes: Vec<Node>) -> Vec<Node> {
                     children: compact_nodes(children),
                 });
             }
-            Node::List { id, truncated, shown, total_items, current_page, total_pages, children } => {
+            Node::List {
+                id,
+                truncated,
+                shown,
+                total_items,
+                current_page,
+                total_pages,
+                children,
+            } => {
                 result.push(Node::List {
-                    id, truncated, shown, total_items, current_page, total_pages,
+                    id,
+                    truncated,
+                    shown,
+                    total_items,
+                    current_page,
+                    total_pages,
                     children: compact_nodes(children),
                 });
             }
-            Node::Item { class_name, children } => {
+            Node::Item {
+                class_name,
+                children,
+            } => {
                 result.push(Node::Item {
                     class_name,
                     children: compact_nodes(children),
                 });
             }
-            Node::Table { id, truncated, shown, total_items, current_page, total_pages, children } => {
+            Node::Table {
+                id,
+                truncated,
+                shown,
+                total_items,
+                current_page,
+                total_pages,
+                children,
+            } => {
                 result.push(Node::Table {
-                    id, truncated, shown, total_items, current_page, total_pages,
+                    id,
+                    truncated,
+                    shown,
+                    total_items,
+                    current_page,
+                    total_pages,
                     children: compact_nodes(children),
                 });
             }
             Node::Row { children } => {
-                result.push(Node::Row { children: compact_nodes(children) });
+                result.push(Node::Row {
+                    children: compact_nodes(children),
+                });
             }
             Node::Cell { children } => {
-                result.push(Node::Cell { children: compact_nodes(children) });
+                result.push(Node::Cell {
+                    children: compact_nodes(children),
+                });
             }
             other => result.push(other),
         }
@@ -937,9 +1010,7 @@ fn build_node<'a>(
             }
             let id = format!("e{}", state.next_element_id);
             state.next_element_id += 1;
-            state
-                .element_refs
-                .insert(id.clone(), raw.ref_id.clone());
+            state.element_refs.insert(id.clone(), raw.ref_id.clone());
             let media_state = raw
                 .attrs
                 .get("media-state")
@@ -1043,6 +1114,19 @@ fn build_list_node<'a>(
     let items = collect_list_items(raw, children_by_parent, node_by_ref, filter, state);
     if items.is_empty() {
         return None;
+    }
+
+    if filter.expand_blocks {
+        let total_items = items.len();
+        return Some(Node::List {
+            id: None,
+            truncated: false,
+            shown: total_items,
+            total_items,
+            current_page: 1,
+            total_pages: 1,
+            children: items,
+        });
     }
 
     let pages = paginate_block(&items, estimate_list_page_lines);
@@ -1168,7 +1252,10 @@ fn build_list_item<'a>(
         None
     } else {
         let class_name = raw.attrs.get("class").cloned();
-        Some(Node::Item { class_name, children })
+        Some(Node::Item {
+            class_name,
+            children,
+        })
     }
 }
 
@@ -1182,6 +1269,19 @@ fn build_table_node<'a>(
     let rows = collect_table_rows(raw, children_by_parent, node_by_ref, filter, state);
     if rows.is_empty() {
         return None;
+    }
+
+    if filter.expand_blocks {
+        let total_items = rows.len();
+        return Some(Node::Table {
+            id: None,
+            truncated: false,
+            shown: total_items,
+            total_items,
+            current_page: 1,
+            total_pages: 1,
+            children: rows,
+        });
     }
 
     let pages = paginate_block(&rows, estimate_table_page_lines);
@@ -1338,8 +1438,17 @@ fn interactive_node(raw: &RawNode, interactive: InteractiveKind, state: &mut Bui
     let class_name = raw.attrs.get("class").cloned();
 
     match interactive {
-        InteractiveKind::Link { text, href } => Node::Link { id, text, href, class_name },
-        InteractiveKind::Button { text } => Node::Button { id, text, class_name },
+        InteractiveKind::Link { text, href } => Node::Link {
+            id,
+            text,
+            href,
+            class_name,
+        },
+        InteractiveKind::Button { text } => Node::Button {
+            id,
+            text,
+            class_name,
+        },
         InteractiveKind::Input {
             text,
             input_type,
@@ -2041,6 +2150,59 @@ mod tests {
     }
 
     #[test]
+    fn parse_full_page_expands_long_lists_into_single_view() {
+        let body = node("r1", None, "body", "", 0.0);
+        let ul = node("r2", Some("r1"), "ul", "", 10.0);
+        let mut nodes = vec![body, ul];
+        for index in 0..25 {
+            nodes.push(node(
+                &format!("r{}", index + 3),
+                Some("r2"),
+                "li",
+                &format!("Item {}", index + 1),
+                20.0 + index as f64 * 40.0,
+            ));
+        }
+
+        let page = parse_full_page_from_snapshot(&snapshot(nodes)).unwrap();
+        assert_eq!(page.current_page, 1);
+        assert_eq!(page.total_pages, 1);
+        assert!(page.full_blocks.is_empty());
+
+        match &page.nodes[0] {
+            Node::List {
+                id,
+                truncated,
+                shown,
+                total_items,
+                children,
+                ..
+            } => {
+                assert!(id.is_none());
+                assert!(!truncated);
+                assert_eq!(*shown, 25);
+                assert_eq!(*total_items, 25);
+                assert_eq!(children.len(), 25);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_full_page_includes_offscreen_content_in_one_reading_view() {
+        let body = node("r1", None, "body", "", 0.0);
+        let heading = node("r2", Some("r1"), "h1", "Top", 10.0);
+        let lower = node("r3", Some("r1"), "div", "Bottom", 920.0);
+
+        let page = parse_full_page_from_snapshot(&snapshot(vec![body, heading, lower])).unwrap();
+        assert_eq!(page.current_page, 1);
+        assert_eq!(page.total_pages, 1);
+        assert_eq!(page.nodes.len(), 2);
+        assert!(matches!(&page.nodes[0], Node::Heading { text, .. } if text == "Top"));
+        assert!(matches!(&page.nodes[1], Node::Text { text, .. } if text == "Bottom"));
+    }
+
+    #[test]
     fn search_snapshot_returns_interactive_ids() {
         let body = node("r1", None, "body", "", 0.0);
         let mut link = node("r2", Some("r1"), "a", "Continue", 10.0);
@@ -2204,8 +2366,7 @@ mod tests {
         let mut li2 = node("r4", Some("r2"), "li", "番剧", 30.0);
         li2.attrs.insert("cursor".into(), "pointer".into());
 
-        let page =
-            parse_page_from_snapshot(&snapshot(vec![body, ul, li1, li2]), Some(1)).unwrap();
+        let page = parse_page_from_snapshot(&snapshot(vec![body, ul, li1, li2]), Some(1)).unwrap();
         match &page.nodes[0] {
             Node::List { children, .. } => {
                 assert!(children.len() >= 2);
@@ -2246,9 +2407,7 @@ mod tests {
         let body = node("r1", None, "body", "", 0.0);
         let mut audio = node("r2", Some("r1"), "audio", "", 10.0);
         audio.attrs.insert("media-state".into(), "playing".into());
-        audio
-            .attrs
-            .insert("media-current-time".into(), "30".into());
+        audio.attrs.insert("media-current-time".into(), "30".into());
         audio.attrs.insert("media-duration".into(), "180".into());
         audio.attrs.insert("media-muted".into(), "true".into());
 
@@ -2281,9 +2440,7 @@ mod tests {
         let body = node("r1", None, "body", "", 0.0);
         let mut video = node("r2", Some("r1"), "video", "", 10.0);
         video.attrs.insert("media-state".into(), "playing".into());
-        video
-            .attrs
-            .insert("media-current-time".into(), "42".into());
+        video.attrs.insert("media-current-time".into(), "42".into());
         video.attrs.insert("media-duration".into(), "120".into());
         video.attrs.insert("media-muted".into(), "false".into());
         video

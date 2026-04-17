@@ -33,20 +33,40 @@ pub fn format_block(block: &BlockData, json: bool, verbose: bool) -> String {
             serde_json::to_string_pretty(block).unwrap()
         } else {
             let compact = match block {
-                BlockData::List { id, truncated, shown, total_items, current_page, total_pages, children } => {
-                    BlockData::List {
-                        id: id.clone(), truncated: *truncated, shown: *shown,
-                        total_items: *total_items, current_page: *current_page, total_pages: *total_pages,
-                        children: compact_nodes(children.clone()),
-                    }
-                }
-                BlockData::Table { id, truncated, shown, total_items, current_page, total_pages, children } => {
-                    BlockData::Table {
-                        id: id.clone(), truncated: *truncated, shown: *shown,
-                        total_items: *total_items, current_page: *current_page, total_pages: *total_pages,
-                        children: compact_nodes(children.clone()),
-                    }
-                }
+                BlockData::List {
+                    id,
+                    truncated,
+                    shown,
+                    total_items,
+                    current_page,
+                    total_pages,
+                    children,
+                } => BlockData::List {
+                    id: id.clone(),
+                    truncated: *truncated,
+                    shown: *shown,
+                    total_items: *total_items,
+                    current_page: *current_page,
+                    total_pages: *total_pages,
+                    children: compact_nodes(children.clone()),
+                },
+                BlockData::Table {
+                    id,
+                    truncated,
+                    shown,
+                    total_items,
+                    current_page,
+                    total_pages,
+                    children,
+                } => BlockData::Table {
+                    id: id.clone(),
+                    truncated: *truncated,
+                    shown: *shown,
+                    total_items: *total_items,
+                    current_page: *current_page,
+                    total_pages: *total_pages,
+                    children: compact_nodes(children.clone()),
+                },
             };
             serde_json::to_string_pretty(&compact).unwrap()
         }

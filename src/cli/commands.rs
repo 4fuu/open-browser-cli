@@ -1,7 +1,6 @@
 use anyhow::{Result, bail};
 use serde::Serialize;
 use serde_json::json;
-use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -9,8 +8,8 @@ use tokio::time::sleep;
 use url::Url;
 
 use crate::page::structure::{
-    Node, PageData, parse_page_from_snapshot, parse_snapshot, resolve_block, resolve_block_all,
-    search_snapshot,
+    Node, PageData, parse_full_page_from_snapshot, parse_page_from_snapshot, parse_snapshot,
+    resolve_block, resolve_block_all, search_snapshot,
 };
 use crate::protocol::messages::{Request, Response, actions};
 use crate::transport::client::send_request;
@@ -19,7 +18,6 @@ const NATIVE_HOST_NAME: &str = "com.browser_cli.relay";
 const CHROME_EXTENSION_PLACEHOLDER: &str = "REPLACE_WITH_EXTENSION_ID";
 const FIREFOX_EXTENSION_PLACEHOLDER: &str = "4fu@browser-cli";
 const DEFAULT_PAGE_ALL_SETTLE_MS: u64 = 500;
-const NODE_IDENTITY_KEY_SEPARATOR: &str = "\u{1f}";
 
 #[derive(Debug, Clone, Serialize)]
 struct ActionOutput {
@@ -252,7 +250,10 @@ pub async fn page(
         };
         parse_page_from_snapshot(&snapshot, resolved_page)?
     };
-    println!("{}", crate::cli::output::format_page(&page_data, json_mode, verbose));
+    println!(
+        "{}",
+        crate::cli::output::format_page(&page_data, json_mode, verbose)
+    );
     Ok(())
 }
 
@@ -653,7 +654,13 @@ pub async fn type_text(
     Ok(())
 }
 
-pub async fn search(session_id: &str, query: &str, fresh: bool, json_mode: bool, verbose: bool) -> Result<()> {
+pub async fn search(
+    session_id: &str,
+    query: &str,
+    fresh: bool,
+    json_mode: bool,
+    verbose: bool,
+) -> Result<()> {
     let snapshot = fetch_snapshot(
         session_id,
         if fresh {
@@ -864,11 +871,17 @@ pub async fn block(
     if all {
         let block = resolve_block_all(&page, &block_id)
             .ok_or_else(|| block_lookup_error(session_id, source_page, &block_id))?;
-        println!("{}", crate::cli::output::format_block(&block, json_mode, verbose));
+        println!(
+            "{}",
+            crate::cli::output::format_block(&block, json_mode, verbose)
+        );
     } else {
         let block = resolve_block(&page, &block_id, page_num)
             .ok_or_else(|| block_lookup_error(session_id, source_page, &block_id))?;
-        println!("{}", crate::cli::output::format_block(&block, json_mode, verbose));
+        println!(
+            "{}",
+            crate::cli::output::format_block(&block, json_mode, verbose)
+        );
     }
     Ok(())
 }
@@ -895,7 +908,10 @@ pub async fn view(
     .await?;
 
     let view = extract_view(&page, target, verbose)?;
-    println!("{}", crate::cli::output::format_view(&view, json_mode, verbose));
+    println!(
+        "{}",
+        crate::cli::output::format_view(&view, json_mode, verbose)
+    );
     Ok(())
 }
 
@@ -929,9 +945,8 @@ fn resolve_element_to_url(
     snapshot: &crate::protocol::messages::RawSnapshot,
     page: &PageData,
 ) -> Result<(String, String)> {
-    let element_key = normalize_element_target(target).ok_or_else(|| {
-        anyhow::anyhow!("'{target}' is not a valid element ID or URL")
-    })?;
+    let element_key = normalize_element_target(target)
+        .ok_or_else(|| anyhow::anyhow!("'{target}' is not a valid element ID or URL"))?;
 
     let ref_id = page.element_refs.get(&element_key).ok_or_else(|| {
         anyhow::anyhow!(
@@ -991,10 +1006,7 @@ pub async fn download(
     ))
     .await?;
 
-    let b64 = data
-        .get("data")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+    let b64 = data.get("data").and_then(|v| v.as_str()).unwrap_or("");
     let filename = data
         .get("filename")
         .and_then(|v| v.as_str())
@@ -1003,10 +1015,7 @@ pub async fn download(
         .get("content_type")
         .and_then(|v| v.as_str())
         .unwrap_or("application/octet-stream");
-    let size = data
-        .get("size")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
+    let size = data.get("size").and_then(|v| v.as_u64()).unwrap_or(0);
 
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(b64)
@@ -1098,10 +1107,7 @@ pub async fn screenshot(
         .get("image")
         .and_then(|v| v.as_str())
         .ok_or_else(|| anyhow::anyhow!("missing image data in response"))?;
-    let format = data
-        .get("format")
-        .and_then(|v| v.as_str())
-        .unwrap_or("png");
+    let format = data.get("format").and_then(|v| v.as_str()).unwrap_or("png");
 
     let image_bytes = base64::engine::general_purpose::STANDARD
         .decode(image_b64)
@@ -1204,7 +1210,6 @@ async fn fetch_all_pages_from_snapshot(
     mut snapshot: crate::protocol::messages::RawSnapshot,
     settle_ms: u64,
 ) -> Result<PageData> {
-    let mut pages = Vec::new();
     let mut target_page = 1;
 
     loop {
@@ -1219,286 +1224,10 @@ async fn fetch_all_pages_from_snapshot(
         scroll_session_to(session_id, scroll_top_for_page(&snapshot, target_page)).await?;
         sleep(Duration::from_millis(settle_ms)).await;
         snapshot = fetch_snapshot(session_id, actions::GET_PAGE_FRESH).await?;
-        pages.push(parse_page_from_snapshot(&snapshot, Some(target_page))?);
         target_page += 1;
     }
 
-    Ok(aggregate_pages(pages))
-}
-
-fn aggregate_pages(pages: Vec<PageData>) -> PageData {
-    if pages.is_empty() {
-        return PageData {
-            url: String::new(),
-            title: String::new(),
-            current_page: 1,
-            total_pages: 1,
-            truncated: false,
-            shown: 0,
-            total: 0,
-            nodes: Vec::new(),
-            element_refs: Default::default(),
-            full_texts: Default::default(),
-            full_blocks: Default::default(),
-        };
-    }
-
-    let mut pages = pages.into_iter();
-    let first_page = pages
-        .next()
-        .expect("pages iterator should not be empty after checking");
-    let mut aggregated_nodes = first_page.nodes;
-    let mut seen_keys: HashSet<String> = aggregated_nodes.iter().map(node_identity_key).collect();
-
-    for page in pages {
-        append_page_nodes(&mut aggregated_nodes, &mut seen_keys, page.nodes);
-    }
-
-    reassign_page_node_ids(&mut aggregated_nodes);
-    let total = count_page_nodes(&aggregated_nodes);
-
-    PageData {
-        url: first_page.url,
-        title: first_page.title,
-        current_page: 1,
-        total_pages: 1,
-        truncated: false,
-        shown: total,
-        total,
-        nodes: aggregated_nodes,
-        element_refs: Default::default(),
-        full_texts: Default::default(),
-        full_blocks: Default::default(),
-    }
-}
-
-fn append_page_nodes(
-    aggregated: &mut Vec<Node>,
-    seen_keys: &mut HashSet<String>,
-    incoming: Vec<Node>,
-) {
-    if aggregated.is_empty() {
-        for node in incoming {
-            seen_keys.insert(node_identity_key(&node));
-            aggregated.push(node);
-        }
-        return;
-    }
-
-    let mut skipping_prefix_duplicates = true;
-
-    for node in incoming {
-        let key = node_identity_key(&node);
-        if skipping_prefix_duplicates && seen_keys.contains(&key) {
-            continue;
-        }
-
-        skipping_prefix_duplicates = false;
-        seen_keys.insert(key);
-        aggregated.push(node);
-    }
-}
-
-fn node_identity_key(node: &Node) -> String {
-    match node {
-        Node::Container {
-            tag,
-            role,
-            class_name,
-            children,
-        } => format!(
-            "container|{tag}|{}|{}|{}",
-            role.as_deref().unwrap_or_default(),
-            class_name.as_deref().unwrap_or_default(),
-            child_identity_keys(children)
-        ),
-        Node::Text { text, .. } => format!("text|{text}"),
-        Node::Heading { level, text } => format!("heading|{level}|{text}"),
-        Node::Link {
-            text,
-            href,
-            class_name,
-            ..
-        } => format!(
-            "link|{text}|{}|{}",
-            href.as_deref().unwrap_or_default(),
-            class_name.as_deref().unwrap_or_default()
-        ),
-        Node::Button {
-            text, class_name, ..
-        } => format!(
-            "button|{text}|{}",
-            class_name.as_deref().unwrap_or_default()
-        ),
-        Node::Input {
-            input_type,
-            placeholder,
-            value,
-            disabled,
-            ..
-        } => format!(
-            "input|{input_type}|{}|{}|{disabled}",
-            placeholder.as_deref().unwrap_or_default(),
-            value.as_deref().unwrap_or_default()
-        ),
-        Node::Checkbox { text, checked, .. } => format!("checkbox|{text}|{checked}"),
-        Node::Radio {
-            text,
-            name,
-            selected,
-            ..
-        } => format!(
-            "radio|{text}|{}|{selected}",
-            name.as_deref().unwrap_or_default()
-        ),
-        Node::Select {
-            text,
-            selected,
-            disabled,
-            ..
-        } => format!(
-            "select|{text}|{}|{disabled}",
-            selected.as_deref().unwrap_or_default()
-        ),
-        Node::Textarea {
-            text,
-            placeholder,
-            disabled,
-            ..
-        } => format!(
-            "textarea|{text}|{}|{disabled}",
-            placeholder.as_deref().unwrap_or_default()
-        ),
-        Node::List {
-            truncated,
-            shown,
-            total_items,
-            current_page,
-            total_pages,
-            children,
-            ..
-        } => format!(
-            "list|{truncated}|{shown}|{total_items}|{current_page}|{total_pages}|{}",
-            child_identity_keys(children)
-        ),
-        Node::Item {
-            class_name,
-            children,
-        } => format!(
-            "item|{}|{}",
-            class_name.as_deref().unwrap_or_default(),
-            child_identity_keys(children)
-        ),
-        Node::Table {
-            truncated,
-            shown,
-            total_items,
-            current_page,
-            total_pages,
-            children,
-            ..
-        } => format!(
-            "table|{truncated}|{shown}|{total_items}|{current_page}|{total_pages}|{}",
-            child_identity_keys(children)
-        ),
-        Node::Row { children } => format!("row|{}", child_identity_keys(children)),
-        Node::Cell { children } => format!("cell|{}", child_identity_keys(children)),
-        Node::Media {
-            tag,
-            media_state,
-            current_time,
-            duration,
-            muted,
-            resolution,
-            ..
-        } => format!(
-            "media|{tag}|{media_state}|{current_time}|{}|{muted}|{}",
-            duration.map(|value| value.to_string()).unwrap_or_default(),
-            resolution.as_deref().unwrap_or_default()
-        ),
-    }
-}
-
-fn child_identity_keys(children: &[Node]) -> String {
-    children
-        .iter()
-        .map(node_identity_key)
-        .collect::<Vec<_>>()
-        .join(NODE_IDENTITY_KEY_SEPARATOR)
-}
-
-fn reassign_page_node_ids(nodes: &mut [Node]) {
-    let mut next_element_id = 1;
-    let mut next_text_id = 1;
-    let mut next_block_id = 1;
-    for node in nodes {
-        reassign_node_ids(
-            node,
-            &mut next_element_id,
-            &mut next_text_id,
-            &mut next_block_id,
-        );
-    }
-}
-
-fn reassign_node_ids(
-    node: &mut Node,
-    next_element_id: &mut u32,
-    next_text_id: &mut u32,
-    next_block_id: &mut u32,
-) {
-    match node {
-        Node::Container { children, .. }
-        | Node::Item { children, .. }
-        | Node::Row { children }
-        | Node::Cell { children } => {
-            for child in children {
-                reassign_node_ids(child, next_element_id, next_text_id, next_block_id);
-            }
-        }
-        Node::Text { id, .. } => {
-            if id.is_some() {
-                *id = Some(format!("t{}", *next_text_id));
-                *next_text_id += 1;
-            }
-        }
-        Node::Heading { .. } => {}
-        Node::Link { id, .. }
-        | Node::Button { id, .. }
-        | Node::Input { id, .. }
-        | Node::Checkbox { id, .. }
-        | Node::Radio { id, .. }
-        | Node::Select { id, .. }
-        | Node::Textarea { id, .. }
-        | Node::Media { id, .. } => {
-            *id = format!("e{}", *next_element_id);
-            *next_element_id += 1;
-        }
-        Node::List { id, children, .. } | Node::Table { id, children, .. } => {
-            if id.is_some() {
-                *id = Some(format!("b{}", *next_block_id));
-                *next_block_id += 1;
-            }
-            for child in children {
-                reassign_node_ids(child, next_element_id, next_text_id, next_block_id);
-            }
-        }
-    }
-}
-
-fn count_page_nodes(nodes: &[Node]) -> usize {
-    nodes
-        .iter()
-        .map(|node| match node {
-            Node::Container { children, .. }
-            | Node::List { children, .. }
-            | Node::Item { children, .. }
-            | Node::Table { children, .. }
-            | Node::Row { children }
-            | Node::Cell { children } => 1 + count_page_nodes(children),
-            _ => 1,
-        })
-        .sum()
+    parse_full_page_from_snapshot(&snapshot)
 }
 
 async fn fetch_action_page(
@@ -1775,8 +1504,9 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn native_host_manifest_path_uses_macos_chrome_location() {
-        let path = native_host_manifest_path_from_home("chrome", Path::new("/tmp/browser-cli-home"))
-            .unwrap();
+        let path =
+            native_host_manifest_path_from_home("chrome", Path::new("/tmp/browser-cli-home"))
+                .unwrap();
         assert_eq!(
             path,
             PathBuf::from(
@@ -1925,15 +1655,27 @@ mod tests {
     #[test]
     fn resolve_requested_page_advances_to_adjacent_page() {
         let snapshot = snapshot(850.0, 2400.0, 800.0);
-        assert_eq!(resolve_requested_page(&snapshot, None, true, false), Some(3));
-        assert_eq!(resolve_requested_page(&snapshot, None, false, true), Some(1));
+        assert_eq!(
+            resolve_requested_page(&snapshot, None, true, false),
+            Some(3)
+        );
+        assert_eq!(
+            resolve_requested_page(&snapshot, None, false, true),
+            Some(1)
+        );
     }
 
     #[test]
     fn resolve_requested_page_clamps_explicit_page_to_bounds() {
         let snapshot = snapshot(0.0, 1500.0, 800.0);
-        assert_eq!(resolve_requested_page(&snapshot, Some(0), false, false), Some(1));
-        assert_eq!(resolve_requested_page(&snapshot, Some(9), false, false), Some(2));
+        assert_eq!(
+            resolve_requested_page(&snapshot, Some(0), false, false),
+            Some(1)
+        );
+        assert_eq!(
+            resolve_requested_page(&snapshot, Some(9), false, false),
+            Some(2)
+        );
     }
 
     #[test]
@@ -1941,155 +1683,6 @@ mod tests {
         let snapshot = snapshot(0.0, 1500.0, 800.0);
         assert_eq!(scroll_top_for_page(&snapshot, 2), 700.0);
         assert_eq!(scroll_top_for_page(&snapshot, 9), 700.0);
-    }
-
-    #[test]
-    fn aggregate_pages_reindexes_ids_and_resets_pagination() {
-        let aggregated = aggregate_pages(vec![
-            PageData {
-                url: "https://example.com".into(),
-                title: "Example".into(),
-                current_page: 1,
-                total_pages: 3,
-                truncated: false,
-                shown: 2,
-                total: 2,
-                nodes: vec![
-                    Node::Link {
-                        id: "e1".into(),
-                        text: "Alpha".into(),
-                        href: Some("/alpha".into()),
-                        class_name: None,
-                    },
-                    Node::Text {
-                        id: Some("t1".into()),
-                        text: "Long intro".into(),
-                    },
-                ],
-                element_refs: Default::default(),
-                full_texts: Default::default(),
-                full_blocks: Default::default(),
-            },
-            PageData {
-                url: "https://example.com".into(),
-                title: "Example".into(),
-                current_page: 2,
-                total_pages: 3,
-                truncated: false,
-                shown: 2,
-                total: 2,
-                nodes: vec![Node::List {
-                    id: Some("b1".into()),
-                    truncated: false,
-                    shown: 1,
-                    total_items: 1,
-                    current_page: 1,
-                    total_pages: 1,
-                    children: vec![Node::Item {
-                        class_name: None,
-                        children: vec![Node::Button {
-                            id: "e1".into(),
-                            text: "Beta".into(),
-                            class_name: None,
-                        }],
-                    }],
-                }],
-                element_refs: Default::default(),
-                full_texts: Default::default(),
-                full_blocks: Default::default(),
-            },
-        ]);
-
-        assert_eq!(aggregated.current_page, 1);
-        assert_eq!(aggregated.total_pages, 1);
-        assert!(!aggregated.truncated);
-        assert_eq!(aggregated.shown, aggregated.total);
-        let nodes = serde_json::to_value(&aggregated.nodes).unwrap();
-        assert_eq!(nodes[0]["type"], "link");
-        assert_eq!(nodes[0]["id"], "e1");
-        assert_eq!(nodes[1]["type"], "text");
-        assert_eq!(nodes[1]["id"], "t1");
-        assert_eq!(nodes[2]["type"], "list");
-        assert_eq!(nodes[2]["id"], "b1");
-        assert_eq!(nodes[2]["children"][0]["children"][0]["type"], "button");
-        assert_eq!(nodes[2]["children"][0]["children"][0]["id"], "e2");
-    }
-
-    #[test]
-    fn aggregate_pages_skips_repeated_leading_nodes_from_later_pages() {
-        let sticky_header = Node::Container {
-            tag: "header".into(),
-            role: None,
-            class_name: Some("sticky".into()),
-            children: vec![Node::Link {
-                id: "e1".into(),
-                text: "Docs".into(),
-                href: Some("/docs".into()),
-                class_name: None,
-            }],
-        };
-
-        let aggregated = aggregate_pages(vec![
-            PageData {
-                url: "https://example.com".into(),
-                title: "Example".into(),
-                current_page: 1,
-                total_pages: 2,
-                truncated: false,
-                shown: 2,
-                total: 2,
-                nodes: vec![
-                    sticky_header.clone(),
-                    Node::Text {
-                        id: None,
-                        text: "Page one".into(),
-                    },
-                ],
-                element_refs: Default::default(),
-                full_texts: Default::default(),
-                full_blocks: Default::default(),
-            },
-            PageData {
-                url: "https://example.com".into(),
-                title: "Example".into(),
-                current_page: 2,
-                total_pages: 2,
-                truncated: false,
-                shown: 2,
-                total: 2,
-                nodes: vec![
-                    Node::Container {
-                        tag: "header".into(),
-                        role: None,
-                        class_name: Some("sticky".into()),
-                        children: vec![Node::Link {
-                            id: "e9".into(),
-                            text: "Docs".into(),
-                            href: Some("/docs".into()),
-                            class_name: None,
-                        }],
-                    },
-                    Node::Text {
-                        id: None,
-                        text: "Page two".into(),
-                    },
-                ],
-                element_refs: Default::default(),
-                full_texts: Default::default(),
-                full_blocks: Default::default(),
-            },
-        ]);
-
-        assert_eq!(aggregated.nodes.len(), 3);
-        let nodes = serde_json::to_value(&aggregated.nodes).unwrap();
-        assert_eq!(
-            serde_json::to_value(&sticky_header).unwrap()["children"][0]["text"],
-            nodes[0]["children"][0]["text"]
-        );
-        assert_eq!(nodes[1]["type"], "text");
-        assert_eq!(nodes[1]["text"], "Page one");
-        assert_eq!(nodes[2]["type"], "text");
-        assert_eq!(nodes[2]["text"], "Page two");
     }
 
     #[test]
@@ -2162,17 +1755,29 @@ mod tests {
         let snapshot = RawSnapshot {
             url: "https://example.com".into(),
             title: "Test".into(),
-            viewport: Viewport { width: 1200.0, height: 800.0 },
-            scroll: ScrollState { top: 0.0, height: 800.0 },
+            viewport: Viewport {
+                width: 1200.0,
+                height: 800.0,
+            },
+            scroll: ScrollState {
+                top: 0.0,
+                height: 800.0,
+            },
             nodes: vec![RawNode {
                 ref_id: "r5".into(),
                 parent: None,
                 tag: "a".into(),
                 text: "Download".into(),
-                attrs: std::collections::HashMap::from([
-                    ("href".into(), "/files/report.pdf".into()),
-                ]),
-                rect: Rect { x: 0.0, y: 0.0, w: 100.0, h: 20.0 },
+                attrs: std::collections::HashMap::from([(
+                    "href".into(),
+                    "/files/report.pdf".into(),
+                )]),
+                rect: Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    w: 100.0,
+                    h: 20.0,
+                },
             }],
         };
         let page = PageData {
@@ -2200,17 +1805,29 @@ mod tests {
         let snapshot = RawSnapshot {
             url: "https://example.com".into(),
             title: "Test".into(),
-            viewport: Viewport { width: 1200.0, height: 800.0 },
-            scroll: ScrollState { top: 0.0, height: 800.0 },
+            viewport: Viewport {
+                width: 1200.0,
+                height: 800.0,
+            },
+            scroll: ScrollState {
+                top: 0.0,
+                height: 800.0,
+            },
             nodes: vec![RawNode {
                 ref_id: "r10".into(),
                 parent: None,
                 tag: "img".into(),
                 text: "".into(),
-                attrs: std::collections::HashMap::from([
-                    ("src".into(), "https://cdn.example.com/image.png".into()),
-                ]),
-                rect: Rect { x: 0.0, y: 0.0, w: 100.0, h: 100.0 },
+                attrs: std::collections::HashMap::from([(
+                    "src".into(),
+                    "https://cdn.example.com/image.png".into(),
+                )]),
+                rect: Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    w: 100.0,
+                    h: 100.0,
+                },
             }],
         };
         let page = PageData {
@@ -2238,15 +1855,26 @@ mod tests {
         let snapshot = RawSnapshot {
             url: "https://example.com".into(),
             title: "Test".into(),
-            viewport: Viewport { width: 1200.0, height: 800.0 },
-            scroll: ScrollState { top: 0.0, height: 800.0 },
+            viewport: Viewport {
+                width: 1200.0,
+                height: 800.0,
+            },
+            scroll: ScrollState {
+                top: 0.0,
+                height: 800.0,
+            },
             nodes: vec![RawNode {
                 ref_id: "r1".into(),
                 parent: None,
                 tag: "button".into(),
                 text: "Submit".into(),
                 attrs: std::collections::HashMap::new(),
-                rect: Rect { x: 0.0, y: 0.0, w: 80.0, h: 30.0 },
+                rect: Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    w: 80.0,
+                    h: 30.0,
+                },
             }],
         };
         let page = PageData {

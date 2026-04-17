@@ -457,7 +457,9 @@ fn node_text(node: &Node) -> String {
             .filter(|value| !value.is_empty())
             .collect::<Vec<_>>()
             .join(" "),
-        Node::Media { tag, media_state, .. } => format!("{} ({})", tag, media_state),
+        Node::Media {
+            tag, media_state, ..
+        } => format!("{} ({})", tag, media_state),
     }
 }
 

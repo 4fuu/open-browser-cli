@@ -156,16 +156,22 @@ fn render_node(
             children,
         } => {
             if !should_render_container_tag(tag, role.as_deref()) {
-                let class_for_meta = if strip_class { None } else { class_name.as_deref() };
-                let next_source = extend_source_meta(
-                    source_meta.as_ref(),
-                    tag,
-                    role.as_deref(),
-                    class_for_meta,
-                );
+                let class_for_meta = if strip_class {
+                    None
+                } else {
+                    class_name.as_deref()
+                };
+                let next_source =
+                    extend_source_meta(source_meta.as_ref(), tag, role.as_deref(), class_for_meta);
                 let hidden_flags = sibling_strip_flags(children);
                 for (i, child) in children.iter().enumerate() {
-                    render_node(out, child, indent, Some(next_source.clone()), strip_class || hidden_flags[i]);
+                    render_node(
+                        out,
+                        child,
+                        indent,
+                        Some(next_source.clone()),
+                        strip_class || hidden_flags[i],
+                    );
                 }
                 return;
             }
@@ -190,7 +196,13 @@ fn render_node(
             out.push_str(">\n");
             let container_flags = sibling_strip_flags(children);
             for (i, child) in children.iter().enumerate() {
-                render_node(out, child, indent + 2, None, strip_class || container_flags[i]);
+                render_node(
+                    out,
+                    child,
+                    indent + 2,
+                    None,
+                    strip_class || container_flags[i],
+                );
             }
             out.push_str(&format!("{indent_str}</container>\n"));
         }
@@ -211,7 +223,12 @@ fn render_node(
             }
             out.push_str(&format!(">{}</heading>\n", escape_xml(text)));
         }
-        Node::Link { id, text, href, class_name } => {
+        Node::Link {
+            id,
+            text,
+            href,
+            class_name,
+        } => {
             out.push_str(&format!("{indent_str}<link id=\"{}\"", escape_xml(id)));
             if !strip_class {
                 push_inherited_and_own_class(out, source_meta.as_ref(), class_name.as_deref());
@@ -221,7 +238,11 @@ fn render_node(
             }
             out.push_str(&format!(">{}</link>\n", escape_xml(text)));
         }
-        Node::Button { id, text, class_name } => {
+        Node::Button {
+            id,
+            text,
+            class_name,
+        } => {
             out.push_str(&format!("{indent_str}<button id=\"{}\"", escape_xml(id)));
             if !strip_class {
                 push_inherited_and_own_class(out, source_meta.as_ref(), class_name.as_deref());
@@ -348,13 +369,15 @@ fn render_node(
             let repetitive = list_has_repetitive_items(children);
             let sibling_flags = sibling_strip_flags(children);
             for (i, child) in children.iter().enumerate() {
-                let child_strip =
-                    strip_class || sibling_flags[i] || (repetitive && i > 0);
+                let child_strip = strip_class || sibling_flags[i] || (repetitive && i > 0);
                 render_node(out, child, indent + 2, None, child_strip);
             }
             out.push_str(&format!("{indent_str}</list>\n"));
         }
-        Node::Item { class_name, children } => {
+        Node::Item {
+            class_name,
+            children,
+        } => {
             let class_attr = if strip_class {
                 String::new()
             } else {
@@ -488,10 +511,7 @@ fn push_inherited_attrs(out: &mut String, source_meta: Option<&SourceMeta>) {
     }
     if !source_meta.classes.is_empty() {
         let compacted = compact_class_path(&source_meta.classes);
-        out.push_str(&format!(
-            " class=\"{}\"",
-            escape_xml(&compacted.join("/"))
-        ));
+        out.push_str(&format!(" class=\"{}\"", escape_xml(&compacted.join("/"))));
     }
 }
 
@@ -606,9 +626,7 @@ fn list_has_repetitive_items(children: &[Node]) -> bool {
     let fingerprints: Vec<Vec<&str>> = children
         .iter()
         .filter_map(|child| match child {
-            Node::Item { children, .. } => {
-                Some(children.iter().map(node_type_tag).collect())
-            }
+            Node::Item { children, .. } => Some(children.iter().map(node_type_tag).collect()),
             _ => None,
         })
         .collect();
@@ -1216,9 +1234,7 @@ mod tests {
             resolution: None,
         }]));
 
-        assert!(xml.contains(
-            "<media id=\"e2\" tag=\"audio\" state=\"paused\" time=\"0\"/>"
-        ));
+        assert!(xml.contains("<media id=\"e2\" tag=\"audio\" state=\"paused\" time=\"0\"/>"));
         assert!(!xml.contains("duration="));
         assert!(!xml.contains("muted="));
         assert!(!xml.contains("resolution="));

@@ -61,12 +61,9 @@ pub async fn run() -> Result<()> {
                         continue;
                     }
 
-                    if msg.get("type").and_then(|value| value.as_str())
-                        == Some(DOWNLOAD_CHUNK_TYPE)
+                    if msg.get("type").and_then(|value| value.as_str()) == Some(DOWNLOAD_CHUNK_TYPE)
                     {
-                        if let Err(err) =
-                            handle_download_chunk(msg, &downloads_clone).await
-                        {
+                        if let Err(err) = handle_download_chunk(msg, &downloads_clone).await {
                             eprintln!("relay: failed to handle download chunk: {err}");
                         }
                         continue;
@@ -148,7 +145,8 @@ async fn handle_client(
             }
         };
 
-        let response = finalize_response(request, extension_response, &sessions, &downloads).await?;
+        let response =
+            finalize_response(request, extension_response, &sessions, &downloads).await?;
         write_response(&mut writer, &response).await?;
     }
 
